@@ -6,6 +6,7 @@ import torch
 import typer
 from datasets import DatasetDict, load_from_disk
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from ..datasets import get_dataset_preset, limit_samples, load_dataset_cached
 from ..datasets.dataloader import Seq2SeqDataset, collate_fn
@@ -107,7 +108,7 @@ def main(
     sources = []
 
     with torch.no_grad():
-        for src, tgt in data_loader:
+        for src, tgt in tqdm(data_loader, desc="Batches"):
             src = src.to(device)
             tgt = tgt.to(device)
 
