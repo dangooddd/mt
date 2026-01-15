@@ -107,21 +107,21 @@ def main(
     sources = []
 
     with torch.no_grad():
-        for src_batch, tgt_batch in data_loader:
-            src_batch = src_batch.to(device)
-            tgt_batch = tgt_batch.to(device)
+        for src, tgt in data_loader:
+            src = src.to(device)
+            tgt = tgt.to(device)
 
-            predictions = model.inference(
-                src_batch,
+            pred = model.inference(
+                src,
                 max_len=max_gen_length,
                 bos_token_id=tgt_tokenizer.bos_token_id,
                 eos_token_id=tgt_tokenizer.eos_token_id,
             )
 
             for pred_ids, tgt_ids, src_ids in zip(
-                predictions.cpu().tolist(),
-                tgt_batch.cpu().tolist(),
-                src_batch.cpu().tolist(),
+                pred.cpu().tolist(),
+                tgt.cpu().tolist(),
+                src.cpu().tolist(),
             ):
                 pred_text = tgt_tokenizer.decode(pred_ids, skip_special_tokens=True)
                 tgt_text = tgt_tokenizer.decode(tgt_ids, skip_special_tokens=True)
