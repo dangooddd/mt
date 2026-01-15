@@ -4,7 +4,7 @@ from typing import Optional, cast
 import sacrebleu
 import torch
 import typer
-from datasets import DatasetDict, load_from_disk
+from datasets import Dataset, DatasetDict, load_from_disk
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -65,20 +65,17 @@ def main(
     ).model
 
     if from_disk:
-        dataset = cast(DatasetDict, load_from_disk(dataset_preset))
+        dataset = cast(DatasetDict, load_from_disk(dataset_preset))[split]
     else:
-        dataset = load_dataset_cached(get_dataset_preset(dataset_preset))
+        preset = get_dataset_preset(dataset_preset)
+        preset["split"] = split
+        dataset = load_dataset_cached(preset)[split]
 
     if max_samples is not None:
         dataset = limit_samples(dataset, max_samples)
 
-    if split not in dataset:
-        available = list(dataset.keys())
-        raise ValueError(f"Split '{split}' can not be found: {available}")
-    eval_dataset = dataset[split]
-
     seq2seq_dataset = Seq2SeqDataset(
-        dataset=eval_dataset,
+        dataset=dataset,
         src_tokenizer=src_tokenizer,
         tgt_tokenizer=tgt_tokenizer,
         src_field=src_field,
