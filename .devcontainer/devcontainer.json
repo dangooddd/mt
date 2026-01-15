@@ -1,0 +1,21 @@
+{
+  "name": "mt-devcontainer",
+  "runArgs": ["--gpus", "all"],
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": "..",
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "astral-sh.ty",
+        "charliermarsh.ruff",
+        "ms-python.python",
+        "ms-python.debugpy",
+        "tamasfe.even-better-toml",
+        "saoudrizwan.claude-dev",
+        "asvetliakov.vscode-neovim",
+      ],
+    },
+  },
+}

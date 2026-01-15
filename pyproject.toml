@@ -1,0 +1,40 @@
+[project]
+name = "mt"
+version = "0.1.0"
+description = "Machine translation course work."
+readme = "README.md"
+authors = [{ name = "dangooddd", email = "dangoodds@gmail.com" }]
+requires-python = ">=3.14"
+dependencies = [
+    "datasets>=4.4.2",
+    "lightning>=2.6.0",
+    "pydantic>=2.12.5",
+    "pyyaml>=6.0.3",
+    "sacrebleu>=2.5.1",
+    "tensorboard>=2.20.0",
+    "tokenizers>=0.22.2",
+    "torch>=2.9.1",
+    "transformers>=4.57.3",
+    "typer>=0.21.1",
+]
+
+[tool.uv]
+package = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }]
+
+[build-system]
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.1.0",
+    "ipywidgets>=8.1.8",
+]
