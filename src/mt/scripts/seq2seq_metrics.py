@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 
 from ..datasets import get_dataset_preset, limit_samples, load_dataset_cached
 from ..datasets.dataloader import Seq2SeqDataset, collate_fn
-from ..models import Seq2SeqLightningModule
+from ..models import LuongSeq2Seq, Seq2SeqLightningModule
 from ..tokenizers import Seq2SeqTokenizer
 
 
@@ -23,6 +23,10 @@ def main(
     tgt_field: str = "ru",
     max_gen_length: int = 512,
     max_samples: Optional[int] = 512,
+    embedding_dim: int = 512,
+    hidden_dim: int = 512,
+    num_layers: int = 4,
+    dropout: float = 0.3,
     batch_size: int = 32,
     split: str = "validation",
     seed: int = 42,
@@ -37,10 +41,23 @@ def main(
 
     src_tokenizer = Seq2SeqTokenizer.from_file(src_tokenizer_path)
     tgt_tokenizer = Seq2SeqTokenizer.from_file(tgt_tokenizer_path)
+    src_vocab_size = src_tokenizer.tokenizer.get_vocab_size()
+    tgt_vocab_size = tgt_tokenizer.tokenizer.get_vocab_size()
+
+    model = LuongSeq2Seq(
+        src_vocab_size=src_vocab_size,
+        tgt_vocab_size=tgt_vocab_size,
+        embedding_dim=embedding_dim,
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
+        dropout=dropout,
+        src_pad_token_id=src_tokenizer.pad_token_id,
+        tgt_pad_token_id=tgt_tokenizer.pad_token_id,
+    )
 
     model = Seq2SeqLightningModule.load_from_checkpoint(
         ckpt_path,
-        model=None,
+        model=model,
         src_tokenizer=src_tokenizer,
         tgt_tokenizer=tgt_tokenizer,
         max_gen_length=max_gen_length,
