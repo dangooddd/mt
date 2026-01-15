@@ -25,6 +25,10 @@ CONFIGS: dict[str, dict[str, Any]] = {
         "path": "wmt19",
         "name": "ru-en",
     },
+    "news_commentary": {
+        "path": "Helsinki-NLP/news_commentary",
+        "name": "en-ru",
+    },
 }
 
 

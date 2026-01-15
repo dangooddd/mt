@@ -69,7 +69,7 @@ def main(
     else:
         preset = get_dataset_preset(dataset_preset)
         preset["split"] = split
-        dataset = load_dataset_cached(preset)[split]
+        dataset = cast(Dataset, load_dataset_cached(preset))
 
     if max_samples is not None:
         dataset = limit_samples(dataset, max_samples)
