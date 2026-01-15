@@ -189,7 +189,8 @@ class Seq2SeqLightningModule(LightningModule):
 
         random.seed(self.hparams.seed)  # type: ignore
         self.val_predictions: list[list[int]] = []
-        self.val_references: list[list[int]] = []
+        self.val_targets: list[list[int]] = []
+        self.val_sources: list[list[int]] = []
 
     def forward(self, src: Tensor, tgt: Tensor) -> Tensor:
         return self.model(src, tgt)
@@ -261,18 +262,20 @@ class Seq2SeqLightningModule(LightningModule):
                     eos_token_id=self.tgt_tokenizer.eos_token_id,
                 )
 
-                for pred, ref in zip(predictions, tgt):
+                for pred, tgt_item, src_item in zip(predictions, tgt, src):
                     pred_ids = pred.cpu().tolist()
-                    ref_ids = ref.cpu().tolist()
+                    tgt_ids = tgt_item.cpu().tolist()
+                    src_ids = src_item.cpu().tolist()
 
                     self.val_predictions.append(pred_ids)
-                    self.val_references.append(ref_ids)
+                    self.val_sources.append(src_ids)
+                    self.val_targets.append(tgt_ids)
 
         return loss
 
     def on_validation_epoch_end(self):
         if self.hparams.compute_bleu and self.val_predictions:  # type: ignore
-            bleu_score = self._compute_bleu()
+            bleu_score = self._validation_bleu()
             self.log(
                 "val/bleu",
                 bleu_score,
@@ -282,35 +285,41 @@ class Seq2SeqLightningModule(LightningModule):
             )
 
         self.val_predictions.clear()
-        self.val_references.clear()
+        self.val_targets.clear()
+        self.val_sources.clear()
 
-    def _compute_bleu(self) -> float:
-        """Compute BLEU score using sacrebleu."""
-        if not self.val_predictions or not self.val_references:
+    def _validation_bleu(self) -> float:
+        if len(self.val_predictions) == 0 or len(self.val_targets) == 0:
             return 0.0
 
         predictions_text = []
-        references_text = []
+        targets_text = []
 
-        for pred_ids, ref_ids in zip(self.val_predictions, self.val_references):
+        for pred_ids, tgt_ids in zip(self.val_predictions, self.val_targets):
             pred_text = self.tgt_tokenizer.decode(pred_ids, skip_special_tokens=True)
-            ref_text = self.tgt_tokenizer.decode(ref_ids, skip_special_tokens=True)
+            tgt_text = self.tgt_tokenizer.decode(tgt_ids, skip_special_tokens=True)
             predictions_text.append(pred_text)
-            references_text.append(ref_text)
+            targets_text.append(tgt_text)
 
         bleu = sacrebleu.corpus_bleu(
             predictions_text,
-            [references_text],
+            [targets_text],
             tokenize="13a",
         )
 
         if isinstance(self.logger, TensorBoardLogger) and len(predictions_text) > 0:
             example_idx = random.choice(list(range(len(predictions_text))))
+            example_source = self.src_tokenizer.decode(
+                self.val_sources[example_idx],
+                skip_special_tokens=True,
+            )
             example_text = (
                 f"Prediction: {predictions_text[example_idx]}\n"
-                f"Reference: {references_text[example_idx]}\n"
+                f"Target: {targets_text[example_idx]}\n"
+                f"Source: {example_source}\n"
                 f"Prediction ids: {self.val_predictions[example_idx]}\n"
-                f"Reference ids: {self.val_references[example_idx]}\n"
+                f"Target ids: {self.val_targets[example_idx]}\n"
+                f"Source ids: {self.val_sources[example_idx]}\n"
             )
             self.logger.experiment.add_text(
                 "val/prediction_example",
