@@ -2,15 +2,18 @@ from typing import cast
 
 import torch.optim as optim
 from datasets import load_from_disk
+from ignite.engine import Events
+from ignite.handlers import ProgressBar
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader, Dataset
 
 from mt.models.luong import LuongSeq2Seq
 from mt.models.train import (
-    attach_running_average,
-    attach_tensorboard_loss_logging,
+    attach_tensorboard_logging,
     build_collate_fn,
     compute_loss,
+    compute_predictions,
+    create_evaluator,
     create_trainer,
 )
 from mt.tokenizers import UnigramTokenizer
@@ -18,9 +21,11 @@ from mt.tokenizers import UnigramTokenizer
 MAX_LR = 0.001
 MIN_LR = 0.000001
 BATCH_SIZE = 100
-EPOCH_STEPS = 1000
+EPOCH_STEPS = 50000
 WARMUP_STEPS = 50000
 STEPS = 5000000
+MAX_LENGTH = 1024
+EXPERIMENT = "luong-v1"
 
 dataset = load_from_disk("data/datasets/opus-100-final")
 tokenizer_ru = UnigramTokenizer.from_file("data/tokenizers/ru-unigram-24000.json")
@@ -57,15 +62,6 @@ scheduler = optim.lr_scheduler.SequentialLR(
     milestones=[WARMUP_STEPS],
 )
 
-trainer = create_trainer(
-    model=model,
-    optimizer=optimizer,
-    criterion=criterion,
-    compute_loss=compute_loss,
-)
-attach_running_average(trainer)
-attach_tensorboard_loss_logging(trainer, "data/runs")
-
 collate_fn = build_collate_fn(
     src_tokenizer=tokenizer_ru,
     tgt_tokenizer=tokenizer_en,
@@ -82,6 +78,56 @@ train_loader = DataLoader(
     num_workers=8,
     shuffle=True,
 )
+
+evaluation_loader = DataLoader(
+    cast(Dataset, dataset["validation"]),
+    batch_size=BATCH_SIZE,
+    collate_fn=collate_fn,
+    num_workers=8,
+)
+
+trainer = create_trainer(
+    model=model,
+    optimizer=optimizer,
+    criterion=criterion,
+    scheduler=scheduler,
+    compute_loss=compute_loss,
+)
+
+evaluator = create_evaluator(
+    model=model,
+    criterion=criterion,
+    compute_loss=compute_loss,
+    compute_predictions=compute_predictions,
+    compute_predictions_kwargs={"tgt_tokenizer": tokenizer_en, "max_length": MAX_LENGTH},
+)
+
+train_tb_logger = attach_tensorboard_logging(
+    trainer,
+    f"data/runs/{EXPERIMENT}",
+    tag="train",
+    every=100,
+)
+
+evaluation_tb_logger = attach_tensorboard_logging(
+    evaluator,
+    f"data/runs/{EXPERIMENT}",
+    tag="evaluation",
+)
+
+ProgressBar().attach(trainer, metric_names=["loss"])
+
+
+@trainer.on(Events.COMPLETED)
+def _close_loggers(_):
+    train_tb_logger.close()
+    evaluation_tb_logger.close()
+
+
+@trainer.on(Events.EPOCH_COMPLETED)
+def run_validation(_):
+    evaluator.run(evaluation_loader)
+
 
 trainer.run(
     train_loader,

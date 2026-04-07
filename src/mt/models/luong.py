@@ -7,7 +7,7 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 class LuongAttention(nn.Module):
     def __init__(self, encoder_dim: int, decoder_dim: int):
         super().__init__()
-        self.linear = nn.Linear(encoder_dim, decoder_dim, bias=False)
+        self.key_proj = nn.Linear(encoder_dim, decoder_dim, bias=False)
 
     def forward(
         self,
@@ -15,12 +15,13 @@ class LuongAttention(nn.Module):
         encoder_outputs: Tensor,  # (batch, src_len, encoder_dim)
         mask: Tensor,  # (batch, src_len)
     ):
-        # project encoder outputs: (batch, src_len, encoder_dim) -> (batch, src_len, decoder_dim)
-        encoder_proj = self.linear(encoder_outputs)  # (batch, src_len, decoder_dim)
+        # project encoder outputs for scoring only:
+        # (batch, src_len, encoder_dim) -> (batch, src_len, decoder_dim)
+        keys = self.key_proj(encoder_outputs)  # (batch, src_len, decoder_dim)
 
         # compute scores: (batch, src_len)
         scores = torch.bmm(
-            encoder_proj,
+            keys,
             decoder_hidden.unsqueeze(2),  # (batch, decoder_dim, 1)
         ).squeeze(2)
 
@@ -31,11 +32,11 @@ class LuongAttention(nn.Module):
         # attention weights
         attn_weights = torch.softmax(scores, dim=1)  # (batch, src_len)
 
-        # context vector
+        # context vector over original encoder outputs
         context = torch.bmm(
             attn_weights.unsqueeze(1),  # (batch, 1, src_len)
-            encoder_proj,  # (batch, src_len, decoder_dim)
-        ).squeeze(1)  # (batch, decoder_dim)
+            encoder_outputs,  # (batch, src_len, encoder_dim)
+        ).squeeze(1)  # (batch, encoder_dim)
 
         return context, attn_weights
 
@@ -105,7 +106,7 @@ class LuongSeq2Seq(nn.Module):
         self.attention = LuongAttention(2 * hidden_dim, hidden_dim)
 
         self.output = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.Linear(hidden_dim * 3, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.Tanh(),
             nn.Dropout(dropout),
@@ -116,12 +117,12 @@ class LuongSeq2Seq(nn.Module):
 
     def init_weights(self):
         for name, p in self.named_parameters():
-            if "embedding" in name:
+            if name == "encoder_emb.0.weight":
                 nn.init.normal_(p, mean=0, std=0.01)
-                if "src" in name:
-                    p.data[self.src_pad_token_id].zero_()
-                else:
-                    p.data[self.tgt_pad_token_id].zero_()
+                p.data[self.src_pad_token_id].zero_()
+            elif name == "decoder_emb.0.weight":
+                nn.init.normal_(p, mean=0, std=0.01)
+                p.data[self.tgt_pad_token_id].zero_()
             elif p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 

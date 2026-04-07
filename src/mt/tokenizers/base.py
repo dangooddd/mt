@@ -100,6 +100,9 @@ class BaseTokenizer:
             skip_special_tokens=skip_special_tokens,
         )
 
+    def decode_batch(self, sequences: list[list[str]], skip_special_tokens: bool = True):
+        return self.tokenizer.decode_batch(sequences, skip_special_tokens)
+
     def enable_padding(self, direction: str):
         self.tokenizer.enable_padding(
             direction=direction,
@@ -109,6 +112,12 @@ class BaseTokenizer:
 
     def no_padding(self):
         self.tokenizer.no_padding()
+
+    def enable_truncation(self, max_length: int, direction: str = "right"):
+        self.tokenizer.enable_truncation(max_length=max_length, direction=direction)
+
+    def no_truncation(self):
+        self.tokenizer.no_truncation()
 
     def get_vocab_size(self, with_added_tokens: bool = True) -> int:
         return self.tokenizer.get_vocab_size(with_added_tokens)
