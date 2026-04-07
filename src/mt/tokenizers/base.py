@@ -100,6 +100,19 @@ class BaseTokenizer:
             skip_special_tokens=skip_special_tokens,
         )
 
+    def enable_padding(self, direction: str):
+        self.tokenizer.enable_padding(
+            direction=direction,
+            pad_id=self.pad_token_id,
+            pad_token=self.pad_token,
+        )
+
+    def no_padding(self):
+        self.tokenizer.no_padding()
+
+    def get_vocab_size(self, with_added_tokens: bool = True) -> int:
+        return self.tokenizer.get_vocab_size(with_added_tokens)
+
     def train_from_iterator(
         self,
         iterator: Iterator[str],
@@ -132,5 +145,5 @@ class BaseTokenizer:
         self.tokenizer.save(path, pretty)
 
     @classmethod
-    def from_file(cls, path: str | PathLike[str]):
+    def from_file(cls, path: str | PathLike[str]) -> BaseTokenizer:
         return cls(Tokenizer.from_file(str(path)))

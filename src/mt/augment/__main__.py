@@ -100,7 +100,18 @@ async def augment(
     model: str,
     threshold: float,
 ) -> AugmentResult:
-    if example["score"] >= threshold:
+    if (
+        example.get("aug_message", "-") == ""
+        and len(example.get("aug_ru", "")) > 0
+        and len(example.get("aug_en", "")) > 0
+    ):
+        return {
+            "aug_ru": example["aug_ru"],
+            "aug_en": example["aug_en"],
+            "aug_message": example["aug_message"],
+        }
+
+    if example["score"] >= threshold and example["ru_detected"] and example["en_detected"]:
         return {
             "aug_ru": "",
             "aug_en": "",

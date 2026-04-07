@@ -34,7 +34,7 @@ def main():
             "expected": args.expected,
         },
         batched=True,
-        batch_size=512,
+        batch_size=1000,
         load_from_cache_file=False,
     )
 

@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -7,8 +5,6 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 
 class LuongAttention(nn.Module):
-    """Luong attention with learnable matrix."""
-
     def __init__(self, encoder_dim: int, decoder_dim: int):
         super().__init__()
         self.linear = nn.Linear(encoder_dim, decoder_dim, bias=False)
@@ -18,24 +14,24 @@ class LuongAttention(nn.Module):
         decoder_hidden: Tensor,  # (batch, decoder_dim)
         encoder_outputs: Tensor,  # (batch, src_len, encoder_dim)
         mask: Tensor,  # (batch, src_len)
-    ) -> Tuple[Tensor, Tensor]:
-        # Project encoder outputs: (batch, src_len, encoder_dim) -> (batch, src_len, decoder_dim)
+    ):
+        # project encoder outputs: (batch, src_len, encoder_dim) -> (batch, src_len, decoder_dim)
         encoder_proj = self.linear(encoder_outputs)  # (batch, src_len, decoder_dim)
 
-        # Compute scores: (batch, src_len)
+        # compute scores: (batch, src_len)
         scores = torch.bmm(
             encoder_proj,
             decoder_hidden.unsqueeze(2),  # (batch, decoder_dim, 1)
         ).squeeze(2)
 
-        # Apply mask
+        # apply mask
         neg_inf = torch.finfo(scores.dtype).min
         scores = scores.masked_fill(~mask, neg_inf)
 
-        # Attention weights
+        # attention weights
         attn_weights = torch.softmax(scores, dim=1)  # (batch, src_len)
 
-        # Context vector
+        # context vector
         context = torch.bmm(
             attn_weights.unsqueeze(1),  # (batch, 1, src_len)
             encoder_proj,  # (batch, src_len, decoder_dim)
@@ -45,8 +41,6 @@ class LuongAttention(nn.Module):
 
 
 class LuongSeq2Seq(nn.Module):
-    """Seq2Seq model with BiLSTM encoder, Luong attention, and LayerNorm."""
-
     def __init__(
         self,
         src_vocab_size: int,
@@ -57,17 +51,18 @@ class LuongSeq2Seq(nn.Module):
         dropout: float = 0.3,
         src_pad_token_id: int = 0,
         tgt_pad_token_id: int = 0,
+        tgt_bos_token_id: int = 1,
+        tgt_eos_token_id: int = 2,
     ):
         super().__init__()
-        self.src_vocab_size = src_vocab_size
-        self.tgt_vocab_size = tgt_vocab_size
-        self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.src_pad_token_id = src_pad_token_id
         self.tgt_pad_token_id = tgt_pad_token_id
+        self.tgt_bos_token_id = tgt_bos_token_id
+        self.tgt_eos_token_id = tgt_eos_token_id
 
-        self.src_embedding = nn.Sequential(
+        self.encoder_emb = nn.Sequential(
             nn.Embedding(
                 src_vocab_size,
                 embedding_dim,
@@ -76,7 +71,7 @@ class LuongSeq2Seq(nn.Module):
             nn.Dropout(dropout),
         )
 
-        self.tgt_embedding = nn.Sequential(
+        self.decoder_emb = nn.Sequential(
             nn.Embedding(
                 tgt_vocab_size,
                 embedding_dim,
@@ -121,7 +116,7 @@ class LuongSeq2Seq(nn.Module):
 
     def init_weights(self):
         for name, p in self.named_parameters():
-            if "embedding" in name and ("src" in name or "tgt" in name):
+            if "embedding" in name:
                 nn.init.normal_(p, mean=0, std=0.01)
                 if "src" in name:
                     p.data[self.src_pad_token_id].zero_()
@@ -130,31 +125,26 @@ class LuongSeq2Seq(nn.Module):
             elif p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def encode(
-        self,
-        src: Tensor,
-    ) -> Tuple[Tensor, Tuple[Tensor, Tensor], Tensor]:
-        """Encode source sequence.
-        Returns:
-            encoder_outputs: (batch, src_len, 2 * hidden_dim)  # bidirectional outputs
-            (hidden, cell): tuple of tensors each (num_layers, batch, hidden_dim)
-        """
-        src_mask = src != self.src_pad_token_id
-        src_lengths = src_mask.sum(dim=1)
-
-        src_emb = self.src_embedding(src)  # (batch, src_len, embedding_dim)
+    def encode(self, input_ids: Tensor, attention_mask: Tensor):
+        lengths = attention_mask.sum(dim=1)
+        emb = self.encoder_emb(input_ids)  # (batch, src_len, embedding_dim)
 
         packed = pack_padded_sequence(
-            src_emb,
-            src_lengths.cpu(),
+            emb,
+            lengths.cpu(),
             batch_first=True,
             enforce_sorted=False,
         )
+
         encoder_outputs, (hidden, cell) = self.encoder(packed)
-        encoder_outputs, _ = pad_packed_sequence(encoder_outputs, batch_first=True)
+        encoder_outputs, _ = pad_packed_sequence(
+            encoder_outputs,
+            batch_first=True,
+            total_length=input_ids.size(1),
+        )
         encoder_outputs = self.encoder_norm(encoder_outputs)
 
-        # Project bidirectional states to unidirectional for decoder
+        # project bidirectional states to unidirectional for decoder
         # (num_layers * 2, batch, hidden_dim) -> (num_layers, batch, 2 * hidden_dim)
         hidden = hidden.view(self.num_layers, 2, -1, self.hidden_dim)
         hidden = hidden.permute(0, 2, 1, 3).flatten(2)
@@ -164,90 +154,84 @@ class LuongSeq2Seq(nn.Module):
         hidden = self.hidden_proj(hidden)
         cell = self.cell_proj(cell)
 
-        return encoder_outputs, (hidden, cell), src_mask
+        return encoder_outputs, (hidden, cell)
 
     def decode_step(
         self,
-        input_token: Tensor,  # (batch,)
+        input_id: Tensor,
         hidden: Tensor,
         cell: Tensor,
         encoder_outputs: Tensor,
-        src_mask: Tensor,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        """Single decoder step.
-        Returns:
-            logits: (batch, tgt_vocab_size)
-            new_hidden: (num_layers, batch, hidden_dim)
-            new_cell: (num_layers, batch, hidden_dim)
-        """
-        # Embedding
-        emb = self.tgt_embedding(input_token).unsqueeze(1)  # (batch, 1, embedding_dim)
+        attention_mask: Tensor,
+    ):
+        # embedding
+        emb = self.decoder_emb(input_id).unsqueeze(1)  # (batch, 1, embedding_dim)
 
-        # Decoder LSTM
+        # decoder
         decoder_output, (new_hidden, new_cell) = self.decoder(emb, (hidden, cell))
         decoder_output = self.decoder_norm(decoder_output)
         decoder_hidden = decoder_output.squeeze(1)  # (batch, hidden_dim)
 
-        # Attention
-        context, _ = self.attention(decoder_hidden, encoder_outputs, src_mask)
+        # attention
+        context, _ = self.attention(decoder_hidden, encoder_outputs, attention_mask)
 
-        # Combine context and decoder hidden
-        combined = torch.cat(
-            [decoder_hidden, context], dim=1
-        )  # (batch, hidden_dim * 2)
+        # combine context and decoder hidden
+        combined = torch.cat([decoder_hidden, context], dim=1)  # (batch, hidden_dim * 2)
 
         logits = self.output(combined)
-
         return logits, new_hidden, new_cell
 
-    def forward(self, src: Tensor, tgt: Tensor) -> Tensor:
-        encoder_outputs, (hidden, cell), src_mask = self.encode(src)
+    def forward(self, input_ids: Tensor, output_ids: Tensor, attention_mask: Tensor) -> Tensor:
+        encoder_outputs, (hidden, cell) = self.encode(input_ids, attention_mask)
 
-        batch_size, tgt_len = tgt.size()
-        outputs = []
-        input_token = tgt[:, 0]  # (batch,)
+        _, output_length = output_ids.size()
+        preds = []
+        input_id = output_ids[:, 0]  # (batch,)
 
-        for t in range(1, tgt_len):
+        for t in range(1, output_length):
             logits, hidden, cell = self.decode_step(
-                input_token, hidden, cell, encoder_outputs, src_mask
+                input_id,
+                hidden,
+                cell,
+                encoder_outputs,
+                attention_mask,
             )
-            outputs.append(logits)
-            input_token = tgt[:, t]
+            preds.append(logits)
+            input_id = output_ids[:, t]
 
-        # Stack along time dimension: (batch, tgt_len-1, tgt_vocab_size)
-        return torch.stack(outputs, dim=1)
+        # stack along time dimension: (batch, tgt_len-1, tgt_vocab_size)
+        return torch.stack(preds, dim=1)
 
     def inference(
         self,
-        src: Tensor,
-        max_len: int = 100,
-        bos_token_id: int = 1,
-        eos_token_id: int = 2,
+        input_ids: Tensor,
+        attention_mask: Tensor,
+        max_length: int = 100,
     ) -> Tensor:
-        batch_size = src.size(0)
-        device = src.device
+        batch_size = input_ids.size(0)
+        device = input_ids.device
 
-        encoder_outputs, (hidden, cell), src_mask = self.encode(src)
+        encoder_outputs, (hidden, cell) = self.encode(input_ids, attention_mask)
 
         sequences = torch.full(
-            (batch_size, max_len),
+            (batch_size, max_length),
             self.tgt_pad_token_id,
             dtype=torch.long,
             device=device,
         )
-        sequences[:, 0] = bos_token_id
+        sequences[:, 0] = self.tgt_bos_token_id
 
         decoder_input = torch.full(
             (batch_size, 1),
-            bos_token_id,
+            self.tgt_bos_token_id,
             dtype=torch.long,
             device=device,
         )
         finished = torch.zeros(batch_size, dtype=torch.bool, device=device)
 
-        for t in range(1, max_len):
+        for t in range(1, max_length):
             logits, hidden, cell = self.decode_step(
-                decoder_input.squeeze(1), hidden, cell, encoder_outputs, src_mask
+                decoder_input.squeeze(1), hidden, cell, encoder_outputs, attention_mask
             )
 
             next_token = logits.argmax(dim=-1, keepdim=True)  # (batch, 1)
@@ -256,7 +240,7 @@ class LuongSeq2Seq(nn.Module):
             sequences[mask, t] = next_token[mask, 0]
             decoder_input = next_token
 
-            finished |= next_token.squeeze(1) == eos_token_id
+            finished |= next_token.squeeze(1) == self.tgt_eos_token_id
 
             if finished.all():
                 break
