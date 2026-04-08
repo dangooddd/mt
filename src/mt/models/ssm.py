@@ -1,265 +1,330 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
 
-class SSMBlock(nn.Module):
-    """
-    x_t[h, n] = A[h, n] * x_{t-1}[h, n] + B[h, n] * u_t[h]
-    y_t[h] = sum_n C[h, n] * x_t[h, n] + D[h] * u_t[h]
-    """
+def _next_power_of_two(n: int) -> int:
+    return 1 << (n - 1).bit_length()
 
-    def __init__(self, model_dim: int, state_dim: int, dropout: float = 0.1):
+
+def causal_fft_conv1d(u: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
+    orig_dtype = u.dtype
+    _, _, length = u.shape
+    n_fft = _next_power_of_two(2 * length - 1)
+
+    u_f = torch.fft.rfft(u.float(), n=n_fft, dim=-1)
+    k_f = torch.fft.rfft(k.float(), n=n_fft, dim=-1)
+
+    y = torch.fft.irfft(u_f * k_f.unsqueeze(0), n=n_fft, dim=-1)
+    return y[..., :length].to(orig_dtype)
+
+
+def reverse_padded_sequence(x: Tensor, lengths: Tensor) -> Tensor:
+    batch_size, seq_len, dim = x.shape
+    idx = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(batch_size, -1)
+    rev_idx = lengths.unsqueeze(1) - 1 - idx
+    gather_idx = torch.where(idx < lengths.unsqueeze(1), rev_idx, idx).clamp_min(0)
+    return x.gather(1, gather_idx.unsqueeze(-1).expand(-1, -1, dim))
+
+
+def masked_mean(x: Tensor, mask: Tensor) -> Tensor:
+    mask_f = mask.unsqueeze(-1).to(x.dtype)
+    denom = mask_f.sum(dim=1).clamp_min(1.0)
+    return (x * mask_f).sum(dim=1) / denom
+
+
+class DiagonalSSMKernel(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        n_state: int,
+        dt_min: float = 1e-3,
+        dt_max: float = 1e-1,
+    ) -> None:
         super().__init__()
-        self.model_dim = model_dim
-        self.state_dim = state_dim
+        self.d_model = d_model
+        self.n_state = n_state
 
-        self.in_proj = nn.Linear(model_dim, model_dim)
+        log_dt = torch.rand(d_model) * (math.log(dt_max) - math.log(dt_min)) + math.log(dt_min)
+        self.log_dt = nn.Parameter(log_dt)
 
-        self.A_log = nn.Parameter(torch.zeros(model_dim, state_dim))
-        self.B = nn.Parameter(torch.randn(model_dim, state_dim) * 0.02)
-        self.C = nn.Parameter(torch.randn(model_dim, state_dim) * 0.02)
-        self.D = nn.Parameter(torch.ones(model_dim))
+        self.log_A_real = nn.Parameter(torch.randn(d_model, n_state) - 1.0)
 
-        self.out_proj = nn.Linear(model_dim, model_dim)
-        self.norm = nn.LayerNorm(model_dim)
+        a_im_init = math.pi * torch.arange(n_state, dtype=torch.float32)
+        a_im_init = a_im_init.unsqueeze(0).repeat(d_model, 1)
+        self.A_im = nn.Parameter(a_im_init)
+
+        scale = n_state**-0.5
+        self.B_re = nn.Parameter(torch.randn(d_model, n_state) * scale)
+        self.B_im = nn.Parameter(torch.randn(d_model, n_state) * scale)
+        self.C_re = nn.Parameter(torch.randn(d_model, n_state) * scale)
+        self.C_im = nn.Parameter(torch.randn(d_model, n_state) * scale)
+
+        self.D = nn.Parameter(torch.zeros(d_model))
+
+    def forward(self, length: int) -> tuple[Tensor, Tensor]:
+        dt = torch.exp(self.log_dt).unsqueeze(-1)
+        a = torch.complex(-torch.exp(self.log_A_real), self.A_im)
+        b = torch.complex(self.B_re, self.B_im)
+        c = torch.complex(self.C_re, self.C_im)
+
+        a_dt = dt * a
+        b_bar = torch.expm1(a_dt) / a * b
+
+        t = torch.arange(length, device=a.device, dtype=dt.dtype)
+        vander = torch.exp(a_dt.unsqueeze(-1) * t)
+
+        k = torch.sum((c * b_bar).unsqueeze(-1) * vander, dim=1).real
+        return k, self.D
+
+
+class S4D(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        n_state: int,
+        dt_min: float = 1e-3,
+        dt_max: float = 1e-1,
+    ) -> None:
+        super().__init__()
+        self.kernel = DiagonalSSMKernel(
+            d_model=d_model,
+            n_state=n_state,
+            dt_min=dt_min,
+            dt_max=dt_max,
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        u = x.transpose(1, 2)
+        k, d = self.kernel(u.size(-1))
+        y = causal_fft_conv1d(u, k)
+        y = y + d.view(1, -1, 1) * u
+        return y.transpose(1, 2)
+
+
+class S4DBlock(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        n_state: int,
+        dropout: float = 0.0,
+        dt_min: float = 1e-3,
+        dt_max: float = 1e-1,
+    ) -> None:
+        super().__init__()
+        self.norm = nn.LayerNorm(d_model)
+        self.in_proj = nn.Linear(d_model, 2 * d_model)
+        self.ssm = S4D(
+            d_model=d_model,
+            n_state=n_state,
+            dt_min=dt_min,
+            dt_max=dt_max,
+        )
+        self.out_proj = nn.Linear(d_model, d_model)
         self.dropout = nn.Dropout(dropout)
 
-    @property
-    def A(self) -> Tensor:
-        # stable diagonal decay
-        return torch.exp(-torch.exp(self.A_log))
+    def forward(self, x: Tensor) -> Tensor:
+        residual = x
 
-    def convolution_kernel(self, length: int, *, device: torch.device) -> Tensor:
-        A = self.A
-        B = self.B
-        C = self.C
-        powers = torch.arange(length, device=device)
+        z = self.in_proj(self.norm(x))
+        u, gate = z.chunk(2, dim=-1)
 
-        # for broadcasting
-        # A.unsqueeze: [H, N] -> [1, H, N]
-        # powers.view: [S] -> [S, 1, 1]
-        A_powers = A.unsqueeze(0) ** powers.view(length, 1, 1)
-
-        kernel = (A_powers * B.unsqueeze(0) * C.unsqueeze(0)).sum(dim=-1)
-        return kernel.transpose(0, 1).contiguous()
-
-    def forward(self, u: Tensor, mask: Tensor | None = None) -> Tensor:
-        """Convolutional mode for training.
-
-        Args:
-            u: (batch, seq_len, model_dim)
-            mask: (batch, seq_len) with True for valid positions
-        Returns:
-            (batch, seq_len, model_dim)
-        """
-        if mask is not None:
-            u = u * mask.unsqueeze(-1).to(u.dtype)
-
-        u = self.in_proj(u)
-        _, seq_len, model_dim = u.shape
-        x = u.transpose(1, 2)
-
-        kernel = self.convolution_kernel(seq_len, device=u.device)
-        weight = kernel.flip(-1).unsqueeze(1)
-
-        y = F.conv1d(x, weight, groups=model_dim, padding=seq_len - 1)[..., :seq_len]
-        y = y + self.D.view(1, -1, 1) * x
-        y = y.transpose(1, 2)
+        y = self.ssm(u)
+        y = y * torch.sigmoid(gate)
+        y = F.gelu(y)
         y = self.out_proj(y)
-        y = self.norm(self.dropout(y) + u)
+        y = self.dropout(y)
 
-        if mask is not None:
-            y = y * mask.unsqueeze(-1).to(y.dtype)
-
-        return y
-
-    def init_state(self, batch_size: int, device: torch.device, dtype: torch.dtype) -> Tensor:
-        return torch.zeros(batch_size, self.model_dim, self.state_dim, device=device, dtype=dtype)
-
-    def step(self, u: Tensor, state: Tensor) -> tuple[Tensor, Tensor]:
-        """Recurrent mode for autoregressive decoding.
-
-        Args:
-            u: (batch, model_dim)
-            state: (batch, model_dim, state_dim)
-        Returns:
-            y: (batch, model_dim)
-            new_state: (batch, model_dim, state_dim)
-        """
-        u = self.in_proj(u)
-
-        A = self.A.unsqueeze(0)
-        B = self.B.unsqueeze(0)
-        C = self.C.unsqueeze(0)
-        D = self.D.unsqueeze(0)
-
-        new_state = A * state + B * u.unsqueeze(-1)
-        y = (C * new_state).sum(dim=-1) + D * u
-        y = self.out_proj(y)
-        y = self.norm(self.dropout(y) + u)
-        return y, new_state
+        return residual + y
 
 
-class SSMSeq2Seq(nn.Module):
-    """Seq2Seq model with SSM encoder/decoder and no attention."""
+class S4DStack(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        n_state: int,
+        num_layers: int,
+        dropout: float = 0.0,
+        dt_min: float = 1e-3,
+        dt_max: float = 1e-1,
+    ) -> None:
+        super().__init__()
+        self.blocks = nn.ModuleList(
+            [
+                S4DBlock(
+                    d_model=d_model,
+                    n_state=n_state,
+                    dropout=dropout,
+                    dt_min=dt_min,
+                    dt_max=dt_max,
+                )
+                for _ in range(num_layers)
+            ]
+        )
+        self.norm = nn.LayerNorm(d_model)
 
+    def forward(self, x: Tensor) -> Tensor:
+        for block in self.blocks:
+            x = block(x)
+        return self.norm(x)
+
+
+class S4Seq2Seq(nn.Module):
     def __init__(
         self,
         src_vocab_size: int,
         tgt_vocab_size: int,
         embedding_dim: int = 512,
         hidden_dim: int = 512,
-        num_layers: int = 4,
-        dropout: float = 0.2,
+        n_state: int = 64,
+        num_layers: int = 6,
+        dropout: float = 0.1,
         src_pad_token_id: int = 0,
         tgt_pad_token_id: int = 0,
-        state_dim: int = 64,
-    ):
+        tgt_bos_token_id: int = 1,
+        tgt_eos_token_id: int = 2,
+        dt_min: float = 1e-3,
+        dt_max: float = 1e-1,
+    ) -> None:
         super().__init__()
-        self.src_vocab_size = src_vocab_size
-        self.tgt_vocab_size = tgt_vocab_size
-        self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
-        self.state_dim = state_dim
         self.src_pad_token_id = src_pad_token_id
         self.tgt_pad_token_id = tgt_pad_token_id
+        self.tgt_bos_token_id = tgt_bos_token_id
+        self.tgt_eos_token_id = tgt_eos_token_id
 
-        self.src_embedding = nn.Sequential(
-            nn.Embedding(src_vocab_size, embedding_dim, padding_idx=src_pad_token_id),
-            nn.Dropout(dropout),
+        self.encoder_emb = nn.Embedding(
+            src_vocab_size,
+            embedding_dim,
+            padding_idx=src_pad_token_id,
         )
-        self.tgt_embedding = nn.Sequential(
-            nn.Embedding(tgt_vocab_size, embedding_dim, padding_idx=tgt_pad_token_id),
-            nn.Dropout(dropout),
+        self.decoder_emb = nn.Embedding(
+            tgt_vocab_size,
+            embedding_dim,
+            padding_idx=tgt_pad_token_id,
         )
 
-        self.src_input_proj = nn.Linear(embedding_dim, hidden_dim)
-        self.tgt_input_proj = nn.Linear(embedding_dim, hidden_dim)
-        self.context_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.encoder_dropout = nn.Dropout(dropout)
+        self.decoder_dropout = nn.Dropout(dropout)
 
-        self.encoder = nn.ModuleList(
-            [SSMBlock(hidden_dim, state_dim, dropout=dropout) for _ in range(num_layers)]
+        self.encoder_in = nn.Linear(embedding_dim, hidden_dim)
+        self.decoder_in = nn.Linear(embedding_dim, hidden_dim)
+
+        self.encoder_forward = S4DStack(
+            d_model=hidden_dim,
+            n_state=n_state,
+            num_layers=num_layers,
+            dropout=dropout,
+            dt_min=dt_min,
+            dt_max=dt_max,
         )
-        self.decoder = nn.ModuleList(
-            [SSMBlock(hidden_dim, state_dim, dropout=dropout) for _ in range(num_layers)]
+        self.encoder_backward = S4DStack(
+            d_model=hidden_dim,
+            n_state=n_state,
+            num_layers=num_layers,
+            dropout=dropout,
+            dt_min=dt_min,
+            dt_max=dt_max,
         )
+        self.encoder_norm = nn.LayerNorm(2 * hidden_dim)
+
+        self.decoder = S4DStack(
+            d_model=hidden_dim,
+            n_state=n_state,
+            num_layers=num_layers,
+            dropout=dropout,
+            dt_min=dt_min,
+            dt_max=dt_max,
+        )
+        self.decoder_context_proj = nn.Linear(2 * hidden_dim, hidden_dim)
 
         self.output = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(hidden_dim * 3, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, tgt_vocab_size),
         )
 
-        self.init_weights()
+    def encode(self, input_ids: Tensor, attention_mask: Tensor) -> tuple[Tensor, Tensor]:
+        lengths = attention_mask.long().sum(dim=1)
 
-    def init_weights(self) -> None:
-        for name, p in self.named_parameters():
-            if "embedding" in name and p.dim() > 1:
-                nn.init.normal_(p, mean=0.0, std=0.01)
-                if "src_embedding.0.weight" in name:
-                    p.data[self.src_pad_token_id].zero_()
-                elif "tgt_embedding.0.weight" in name:
-                    p.data[self.tgt_pad_token_id].zero_()
-            elif p.dim() > 1:
-                nn.init.xavier_uniform_(p)
-            elif "norm" not in name:
-                nn.init.zeros_(p)
+        x = self.encoder_emb(input_ids)
+        x = self.encoder_dropout(x)
+        x = self.encoder_in(x)
 
-    def encode(self, src: Tensor) -> tuple[Tensor, Tensor, Tensor]:
-        src_mask = src != self.src_pad_token_id
-        src_lengths = src_mask.sum(dim=1)
+        x_fwd = self.encoder_forward(x)
 
-        if torch.any(src_lengths == 0):
-            raise ValueError("Source batch contains an empty sequence after padding removal")
+        x_rev = reverse_padded_sequence(x, lengths)
+        x_bwd = self.encoder_backward(x_rev)
+        x_bwd = reverse_padded_sequence(x_bwd, lengths)
 
-        x = self.src_embedding(src)
-        x = self.src_input_proj(x)
+        encoder_outputs = torch.cat([x_fwd, x_bwd], dim=-1)
+        encoder_outputs = self.encoder_norm(encoder_outputs)
+        encoder_outputs = encoder_outputs * attention_mask.unsqueeze(-1).to(encoder_outputs.dtype)
 
-        for layer in self.encoder:
-            x = layer(x, src_mask)
+        context = masked_mean(encoder_outputs, attention_mask)
+        return encoder_outputs, context
 
-        last_indices = (src_lengths - 1).clamp_min(0)
-        batch_indices = torch.arange(src.size(0), device=src.device)
-        context = x[batch_indices, last_indices]
-        context = self.context_proj(context)
-        return x, context, src_mask
+    def decode(self, output_ids: Tensor, context: Tensor) -> Tensor:
+        x = self.decoder_emb(output_ids)
+        x = self.decoder_dropout(x)
+        x = self.decoder_in(x)
 
-    def decode(self, tgt_input: Tensor, context: Tensor) -> Tensor:
-        tgt_mask = tgt_input != self.tgt_pad_token_id
+        x = x + self.decoder_context_proj(context).unsqueeze(1)
+        x = self.decoder(x)
 
-        x = self.tgt_embedding(tgt_input)
-        x = self.tgt_input_proj(x)
-        x = x + context.unsqueeze(1)
+        context_expanded = context.unsqueeze(1).expand(-1, x.size(1), -1)
+        logits = self.output(torch.cat([x, context_expanded], dim=-1))
+        return logits
 
-        for layer in self.decoder:
-            x = layer(x, tgt_mask)
+    def decode_step(self, output_ids: Tensor, context: Tensor) -> Tensor:
+        logits = self.decode(output_ids, context)
+        return logits[:, -1]
 
-        return self.output(x)
+    def forward(self, input_ids: Tensor, output_ids: Tensor, attention_mask: Tensor) -> Tensor:
+        _, context = self.encode(input_ids, attention_mask)
 
-    def decode_step(
-        self,
-        input_token: Tensor,
-        context: Tensor,
-        states: list[Tensor | None],
-    ) -> tuple[Tensor, list[Tensor]]:
-        x = self.tgt_embedding(input_token)
-        x = self.tgt_input_proj(x)
-        x = x + context
+        decoder_input_ids = output_ids[:, :-1]
+        logits = self.decode(decoder_input_ids, context)
 
-        new_states: list[Tensor] = []
-        for i, layer in enumerate(self.decoder):
-            state = states[i]
-            if state is None:
-                state = layer.init_state(x.size(0), x.device, x.dtype)
-            x, state = layer.step(x, state)
-            new_states.append(state)
-
-        logits = self.output(x)
-        return logits, new_states
-
-    def forward(self, src: Tensor, tgt: Tensor) -> Tensor:
-        _, context, _ = self.encode(src)
-        return self.decode(tgt[:, :-1], context)
+        # (batch, tgt_len - 1, tgt_vocab_size)
+        return logits
 
     @torch.no_grad()
     def inference(
         self,
-        src: Tensor,
-        max_len: int = 100,
-        bos_token_id: int = 1,
-        eos_token_id: int = 2,
+        input_ids: Tensor,
+        attention_mask: Tensor,
+        max_length: int = 100,
     ) -> Tensor:
-        batch_size = src.size(0)
-        device = src.device
+        batch_size = input_ids.size(0)
+        device = input_ids.device
 
-        _, context, _ = self.encode(src)
-        states: list[Tensor | None] = [None for _ in range(self.num_layers)]
+        _, context = self.encode(input_ids, attention_mask)
 
         sequences = torch.full(
-            (batch_size, max_len),
+            (batch_size, max_length),
             self.tgt_pad_token_id,
             dtype=torch.long,
             device=device,
         )
-        sequences[:, 0] = bos_token_id
+        sequences[:, 0] = self.tgt_bos_token_id
 
-        input_token = torch.full((batch_size,), bos_token_id, dtype=torch.long, device=device)
         finished = torch.zeros(batch_size, dtype=torch.bool, device=device)
 
-        for t in range(1, max_len):
-            logits, states = self.decode_step(input_token, context, states)
-            next_token = logits.argmax(dim=-1)
+        for t in range(1, max_length):
+            logits_t = self.decode_step(sequences[:, :t], context)
+            next_token = logits_t.argmax(dim=-1)
 
             active = ~finished
             sequences[active, t] = next_token[active]
-            input_token = next_token
 
-            finished |= next_token == eos_token_id
+            finished |= next_token == self.tgt_eos_token_id
             if finished.all():
                 break
 

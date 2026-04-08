@@ -4,21 +4,41 @@ from typing import Any, no_type_check
 
 import torch
 from ignite.engine import Engine, Events
-from ignite.handlers import ProgressBar
+from ignite.handlers import ProgressBar, global_step_from_engine
 from ignite.handlers.tensorboard_logger import TensorboardLogger
-from ignite.metrics import RunningAverage
+from ignite.metrics import Metric
+from ignite.metrics.metric import BatchWise
 from sacrebleu.metrics import BLEU
 from torch import Tensor
 from torch.amp import GradScaler, autocast
 from torch.nn import CrossEntropyLoss
+from torch.nn.utils import clip_grad_norm_
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch.types import Device
 
 from ..tokenizers import BaseTokenizer
 from .luong import LuongSeq2Seq
+from .mamba import MambaSeq2Seq
+from .ssm import S4Seq2Seq
 
-Models = LuongSeq2Seq
+Models = LuongSeq2Seq | S4Seq2Seq | MambaSeq2Seq
+
+
+class OutputMetric(Metric):
+    required_output_keys = None
+
+    def attach(self, engine, name, usage=BatchWise.usage_name):
+        return super().attach(engine, name, usage=usage)
+
+    def reset(self):
+        self._value = None
+
+    def update(self, output):
+        self._value = output
+
+    def compute(self):
+        return self._value
 
 
 class CollateFn:
@@ -129,6 +149,7 @@ def create_trainer(
     criterion: CrossEntropyLoss,
     scheduler: LRScheduler,
     compute_loss: Callable[..., Tensor],
+    max_grad_norm: float = 1.0,
 ) -> Engine:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     use_amp = device.type == "cuda"
@@ -138,24 +159,29 @@ def create_trainer(
     def train_step(engine: Engine, batch: dict[str, Tensor]) -> dict[str, Any]:
         _ = engine
         model.train()
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
 
         with autocast(device_type=device.type, enabled=use_amp):
             loss = compute_loss(model, batch, criterion=criterion, device=device)
 
         scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        grad_norm = clip_grad_norm_(model.parameters(), max_grad_norm)
         scaler.step(optimizer)
         scaler.update()
         scheduler.step()
 
         return {
-            "loss": float(loss.detach()),
+            "loss": loss.detach(),
             "lr": optimizer.param_groups[0]["lr"],
+            "grad_norm": grad_norm,
         }
 
     trainer = Engine(train_step)
-    RunningAverage(output_transform=lambda output: output["loss"]).attach(trainer, "loss")
-    ProgressBar().attach(trainer, metric_names=["loss"], output_transform=lambda x: {"lr": x["lr"]})
+    OutputMetric(output_transform=lambda o: o["grad_norm"]).attach(trainer, "grad_norm")
+    OutputMetric(output_transform=lambda o: o["loss"]).attach(trainer, "loss")
+    OutputMetric(output_transform=lambda o: o["lr"]).attach(trainer, "lr")
+    ProgressBar().attach(trainer, metric_names="all")
     return trainer
 
 
@@ -192,6 +218,8 @@ def create_evaluator(
         }
 
     evaluator = Engine(evaluate_step)
+    pbar = ProgressBar(persist=True)
+
     evaluator.state_dict_user_keys.append("predictions")
     evaluator.state_dict_user_keys.append("references")
     evaluator.state_dict_user_keys.append("loss_sum")
@@ -221,8 +249,12 @@ def create_evaluator(
         bleu_ = bleu.corpus_score(evaluator.state.predictions, [evaluator.state.references]).score
         evaluator.state.metrics["loss"] = float(loss_)
         evaluator.state.metrics["bleu"] = float(bleu_)
-        print(f"Loss, BLEU: {float(loss_)}, {float(bleu_)}")
 
+        if pbar.pbar is not None:
+            pbar.pbar.set_postfix({"loss": f"{loss_:.6f}", "bleu": f"{bleu_:.4f}"})
+            pbar.pbar.refresh()
+
+    pbar.attach(evaluator, metric_names="all", closing_event_name=Events.COMPLETED)
     return evaluator
 
 
@@ -231,14 +263,19 @@ def attach_tensorboard_logging(
     log_dir: str | Path,
     tag: str,
     every: int | None = None,
+    global_step_transform: Callable | None = None,
 ) -> TensorboardLogger:
     logger = TensorboardLogger(log_dir=str(log_dir))
+
+    if global_step_transform is None:
+        global_step_transform = global_step_from_engine(engine)
 
     logger.attach_output_handler(
         engine,
         event_name=(Events.COMPLETED if every is None else Events.ITERATION_COMPLETED(every=every)),
         tag=tag,
         metric_names="all",
+        global_step_transform=global_step_transform,
     )
 
     return logger

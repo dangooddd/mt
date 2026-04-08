@@ -203,6 +203,7 @@ class LuongSeq2Seq(nn.Module):
         # stack along time dimension: (batch, tgt_len-1, tgt_vocab_size)
         return torch.stack(preds, dim=1)
 
+    @torch.no_grad()
     def inference(
         self,
         input_ids: Tensor,

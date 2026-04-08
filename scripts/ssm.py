@@ -8,7 +8,7 @@ from ignite.handlers import Checkpoint, DiskSaver, global_step_from_engine
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader, Dataset
 
-from mt.models.luong import LuongSeq2Seq
+from mt.models.ssm import S4Seq2Seq
 from mt.models.train import (
     attach_tensorboard_logging,
     build_collate_fn,
@@ -21,30 +21,32 @@ from mt.tokenizers import UnigramTokenizer
 
 
 def main():
-    MAX_LR = 0.001
-    MIN_LR = 0.000001
+    MAX_LR = 0.0005
+    MIN_LR = 0.000005
     MAX_GRAD_NORM = 1.0
     BATCH_SIZE = 100
-    EPOCH_STEPS = 500
-    WARMUP_STEPS = 7000
-    STEPS = 70000
-    MAX_LENGTH = 192
-    EXPERIMENT = "luong-wordpiece"
+    EPOCH_STEPS = 2500
+    WARMUP_STEPS = 5000
+    STEPS = 50000
+    MAX_LENGTH = 256
+    EXPERIMENT = "s4-v1"
 
     dataset = load_from_disk("data/datasets/opus-100-final")
-    tokenizer_ru = UnigramTokenizer.from_file("data/tokenizers/ru-wordpiece-24000.json")
-    tokenizer_en = UnigramTokenizer.from_file("data/tokenizers/en-wordpiece-24000.json")
+    tokenizer_ru = UnigramTokenizer.from_file("data/tokenizers/ru-unigram-24000.json")
+    tokenizer_en = UnigramTokenizer.from_file("data/tokenizers/en-unigram-24000.json")
 
-    model = LuongSeq2Seq(
+    model = S4Seq2Seq(
         src_vocab_size=tokenizer_ru.get_vocab_size(),
         tgt_vocab_size=tokenizer_en.get_vocab_size(),
         src_pad_token_id=tokenizer_ru.pad_token_id,
         tgt_pad_token_id=tokenizer_en.pad_token_id,
         tgt_bos_token_id=tokenizer_en.bos_token_id,
         tgt_eos_token_id=tokenizer_en.eos_token_id,
-        embedding_dim=1024,
-        hidden_dim=1024,
-        num_layers=5,
+        embedding_dim=2048,
+        hidden_dim=2048,
+        n_state=128,
+        num_layers=6,
+        dropout=0.1,
     )
 
     optimizer = optim.AdamW(model.parameters(), lr=MAX_LR)
