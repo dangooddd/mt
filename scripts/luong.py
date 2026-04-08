@@ -121,8 +121,6 @@ def main():
         tag="evaluation",
     )
 
-    ProgressBar().attach(trainer, metric_names=["loss"])
-
     @trainer.on(Events.COMPLETED)
     def _close_loggers(_):
         train_tb_logger.close()

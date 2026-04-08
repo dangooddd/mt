@@ -4,7 +4,8 @@ from typing import Any, no_type_check
 
 import torch
 from ignite.engine import Engine, Events
-from ignite.handlers.tensorboard_logger import TensorboardLogger, global_step_from_engine
+from ignite.handlers import ProgressBar
+from ignite.handlers.tensorboard_logger import TensorboardLogger
 from ignite.metrics import RunningAverage
 from sacrebleu.metrics import BLEU
 from torch import Tensor
@@ -147,10 +148,14 @@ def create_trainer(
         scaler.update()
         scheduler.step()
 
-        return {"loss": float(loss.detach())}
+        return {
+            "loss": float(loss.detach()),
+            "lr": optimizer.param_groups[0]["lr"],
+        }
 
     trainer = Engine(train_step)
     RunningAverage(output_transform=lambda output: output["loss"]).attach(trainer, "loss")
+    ProgressBar().attach(trainer, metric_names=["loss"], output_transform=lambda x: {"lr": x["lr"]})
     return trainer
 
 
