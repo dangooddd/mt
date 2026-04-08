@@ -20,33 +20,40 @@ from .luong import LuongSeq2Seq
 Models = LuongSeq2Seq
 
 
-def build_collate_fn(
-    src_tokenizer: BaseTokenizer,
-    tgt_tokenizer: BaseTokenizer,
-    src_column: str = "ru",
-    tgt_column: str = "en",
-    max_src_length: int | None = None,
-    max_tgt_length: int | None = None,
-) -> Callable[[list[dict[str, str]]], dict[str, Tensor]]:
-    src_tokenizer.enable_padding(direction="right")
-    tgt_tokenizer.enable_padding(direction="right")
+class CollateFn:
+    def __init__(
+        self,
+        src_tokenizer: BaseTokenizer,
+        tgt_tokenizer: BaseTokenizer,
+        src_column: str = "ru",
+        tgt_column: str = "en",
+        max_src_length: int | None = None,
+        max_tgt_length: int | None = None,
+    ):
+        self.src_tokenizer = src_tokenizer
+        self.tgt_tokenizer = tgt_tokenizer
+        self.src_column = src_column
+        self.tgt_column = tgt_column
 
-    if max_src_length is not None:
-        src_tokenizer.enable_truncation(max_src_length, direction="right")
-    else:
-        src_tokenizer.no_truncation()
+        self.src_tokenizer.enable_padding(direction="right")
+        self.tgt_tokenizer.enable_padding(direction="right")
 
-    if max_tgt_length is not None:
-        tgt_tokenizer.enable_truncation(max_tgt_length, direction="right")
-    else:
-        tgt_tokenizer.no_truncation()
+        if max_src_length is not None:
+            self.src_tokenizer.enable_truncation(max_src_length, direction="right")
+        else:
+            self.src_tokenizer.no_truncation()
 
-    def collate_fn(batch: list[dict[str, str]]) -> dict[str, Tensor]:
-        src_texts = [item[src_column] for item in batch]
-        tgt_texts = [item[tgt_column] for item in batch]
+        if max_tgt_length is not None:
+            self.tgt_tokenizer.enable_truncation(max_tgt_length, direction="right")
+        else:
+            self.tgt_tokenizer.no_truncation()
 
-        src_encodings = src_tokenizer.encode_batch(src_texts)
-        tgt_encodings = tgt_tokenizer.encode_batch(tgt_texts)
+    def __call__(self, batch: list[dict[str, str]]) -> dict[str, Tensor]:
+        src_texts = [item[self.src_column] for item in batch]
+        tgt_texts = [item[self.tgt_column] for item in batch]
+
+        src_encodings = self.src_tokenizer.encode_batch(src_texts)
+        tgt_encodings = self.tgt_tokenizer.encode_batch(tgt_texts)
 
         src_ids = [encoding.ids for encoding in src_encodings]
         tgt_ids = [encoding.ids for encoding in tgt_encodings]
@@ -58,7 +65,23 @@ def build_collate_fn(
             "tgt_ids": torch.tensor(tgt_ids, dtype=torch.long),
         }
 
-    return collate_fn
+
+def build_collate_fn(
+    src_tokenizer: BaseTokenizer,
+    tgt_tokenizer: BaseTokenizer,
+    src_column: str = "ru",
+    tgt_column: str = "en",
+    max_src_length: int | None = None,
+    max_tgt_length: int | None = None,
+) -> Callable[[list[dict[str, str]]], dict[str, Tensor]]:
+    return CollateFn(
+        src_tokenizer=src_tokenizer,
+        tgt_tokenizer=tgt_tokenizer,
+        src_column=src_column,
+        tgt_column=tgt_column,
+        max_src_length=max_src_length,
+        max_tgt_length=max_tgt_length,
+    )
 
 
 def compute_loss(
