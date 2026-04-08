@@ -87,24 +87,6 @@ class CollateFn:
         }
 
 
-def build_collate_fn(
-    src_tokenizer: BaseTokenizer,
-    tgt_tokenizer: BaseTokenizer,
-    src_column: str = "ru",
-    tgt_column: str = "en",
-    max_src_length: int | None = None,
-    max_tgt_length: int | None = None,
-) -> Callable[[list[dict[str, str]]], dict[str, Tensor]]:
-    return CollateFn(
-        src_tokenizer=src_tokenizer,
-        tgt_tokenizer=tgt_tokenizer,
-        src_column=src_column,
-        tgt_column=tgt_column,
-        max_src_length=max_src_length,
-        max_tgt_length=max_tgt_length,
-    )
-
-
 def compute_loss(
     model: Models,
     batch: dict[str, Tensor],

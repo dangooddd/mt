@@ -10,8 +10,8 @@ from torch.utils.data import DataLoader, Dataset
 
 from mt.models.mamba import MambaSeq2Seq
 from mt.models.train import (
+    CollateFn,
     attach_tensorboard_logging,
-    build_collate_fn,
     compute_loss,
     compute_predictions,
     create_evaluator,
@@ -74,7 +74,7 @@ def main():
         milestones=[WARMUP_STEPS],
     )
 
-    collate_fn = build_collate_fn(
+    collate_fn = CollateFn(
         src_tokenizer=tokenizer_ru,
         tgt_tokenizer=tokenizer_en,
         max_src_length=MAX_LENGTH,
