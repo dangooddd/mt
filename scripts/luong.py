@@ -27,7 +27,7 @@ def main():
     EPOCH_STEPS = 500
     WARMUP_STEPS = 5000
     STEPS = 50000
-    MAX_LENGTH = 192
+    MAX_LENGTH = 256
     EXPERIMENT = "luong-v1"
 
     dataset = load_from_disk("data/datasets/opus-100-final")
@@ -43,7 +43,7 @@ def main():
         tgt_eos_token_id=tokenizer_en.eos_token_id,
         embedding_dim=1024,
         hidden_dim=1024,
-        num_layers=4,
+        num_layers=5,
     )
 
     optimizer = optim.AdamW(model.parameters(), lr=MAX_LR)

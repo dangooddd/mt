@@ -221,8 +221,7 @@ def create_evaluator(
         bleu_ = bleu.corpus_score(evaluator.state.predictions, [evaluator.state.references]).score
         evaluator.state.metrics["loss"] = float(loss_)
         evaluator.state.metrics["bleu"] = float(bleu_)
-        print(f"Evaluation Loss: {float(loss_)}")
-        print(f"Evaluation BLEU: {float(bleu_)}")
+        print(f"Loss, BLEU: {float(loss_)}, {float(bleu_)}")
 
     return evaluator
 
