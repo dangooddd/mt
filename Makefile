@@ -8,6 +8,7 @@ docker-run: docker-build
 		--name "$(CONTAINER_NAME)" \
 		-v "$(CURDIR)":/app \
 		-w /app \
+		--gpus all \
 		"$(IMAGE_NAME)" \
 		tail -f /dev/null
 

@@ -1,4 +1,4 @@
-FROM python:3.14-slim
+FROM pytorch/pytorch:2.10.0-cuda12.8-cudnn9-devel
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -7,12 +7,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates git gcc \
     && rm -rf /var/lib/apt/lists/* \
     && curl -LsSf https://astral.sh/uv/install.sh | sh
-
-COPY pyproject.toml ./
-
-RUN uv pip install --system -r pyproject.toml
-
-COPY . .

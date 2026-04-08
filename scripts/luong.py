@@ -1,3 +1,4 @@
+from multiprocessing import freeze_support
 from typing import cast
 
 import torch.optim as optim
@@ -18,9 +19,11 @@ from mt.models.train import (
 )
 from mt.tokenizers import UnigramTokenizer
 
+freeze_support()
+
 MAX_LR = 0.001
 MIN_LR = 0.000001
-BATCH_SIZE = 100
+BATCH_SIZE = 5000
 EPOCH_STEPS = 50000
 WARMUP_STEPS = 50000
 STEPS = 5000000
@@ -38,6 +41,9 @@ model = LuongSeq2Seq(
     tgt_pad_token_id=tokenizer_en.pad_token_id,
     tgt_bos_token_id=tokenizer_en.bos_token_id,
     tgt_eos_token_id=tokenizer_en.eos_token_id,
+    embedding_dim=1500,
+    hidden_dim=1500,
+    num_layers=6,
 )
 
 optimizer = optim.AdamW(model.parameters(), lr=MAX_LR)
