@@ -4,7 +4,7 @@ from typing import cast
 import torch.optim as optim
 from datasets import load_from_disk
 from ignite.engine import Events
-from ignite.handlers import ProgressBar
+from ignite.handlers import Checkpoint, DiskSaver
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader, Dataset
 
@@ -25,9 +25,9 @@ def main():
     MIN_LR = 0.000001
     BATCH_SIZE = 100
     EPOCH_STEPS = 500
-    WARMUP_STEPS = 5000
-    STEPS = 50000
-    MAX_LENGTH = 256
+    WARMUP_STEPS = 7000
+    STEPS = 70000
+    MAX_LENGTH = 192
     EXPERIMENT = "luong-v1"
 
     dataset = load_from_disk("data/datasets/opus-100-final")
@@ -43,7 +43,7 @@ def main():
         tgt_eos_token_id=tokenizer_en.eos_token_id,
         embedding_dim=1024,
         hidden_dim=1024,
-        num_layers=5,
+        num_layers=4,
     )
 
     optimizer = optim.AdamW(model.parameters(), lr=MAX_LR)
@@ -108,6 +108,34 @@ def main():
         compute_predictions_kwargs={"tgt_tokenizer": tokenizer_en, "max_length": MAX_LENGTH},
     )
 
+    checkpoint_handler = Checkpoint(
+        {
+            "model": model,
+            "optimizer": optimizer,
+            "scheduler": scheduler,
+            "trainer": trainer,
+        },
+        DiskSaver(f"data/checkpoints/{EXPERIMENT}", create_dir=True, require_empty=False),
+        n_saved=10,
+        filename_prefix="training",
+    )
+
+    best_checkpoint_handler = Checkpoint(
+        {"model": model},
+        DiskSaver(f"data/checkpoints/{EXPERIMENT}/best", create_dir=True, require_empty=False),
+        n_saved=1,
+        filename_prefix="best",
+        score_name="bleu",
+        score_function=lambda engine: engine.state.metrics["bleu"],
+    )
+
+    trainer.add_event_handler(
+        Events.ITERATION_COMPLETED(every=EPOCH_STEPS),
+        checkpoint_handler,
+    )
+
+    evaluator.add_event_handler(Events.COMPLETED, best_checkpoint_handler)
+
     train_tb_logger = attach_tensorboard_logging(
         trainer,
         f"data/runs/{EXPERIMENT}",
@@ -127,7 +155,7 @@ def main():
         evaluation_tb_logger.close()
 
     @trainer.on(Events.EPOCH_COMPLETED)
-    def run_validation(_):
+    def _run_validation(_):
         evaluator.run(evaluation_loader)
 
     trainer.run(
