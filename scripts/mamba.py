@@ -29,7 +29,7 @@ def main():
     WARMUP_STEPS = 5000
     STEPS = 50000
     MAX_LENGTH = 200
-    EXPERIMENT = "mamba-v2"
+    EXPERIMENT = "mamba-v3"
 
     dataset = load_from_disk("data/datasets/opus-100-final")
     tokenizer_ru = UnigramTokenizer.from_file("data/tokenizers/ru-unigram-24000.json")

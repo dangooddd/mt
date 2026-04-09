@@ -57,8 +57,8 @@ def instantiate_model(
 ) -> tuple[Models, BaseTokenizer, BaseTokenizer, dict[str, Any]]:
     config_path = model_dir / "config.json"
     model_path = model_dir / "model.pt"
-    ru_tokenizer_path = model_dir / "ru_tokenizer.json"
-    en_tokenizer_path = model_dir / "en_tokenizer.json"
+    ru_tokenizer_path = model_dir / "src_tokenizer.json"
+    en_tokenizer_path = model_dir / "tgt_tokenizer.json"
 
     for path in [config_path, model_path, ru_tokenizer_path, en_tokenizer_path]:
         if not path.exists():
@@ -128,10 +128,10 @@ def generate_predictions(
     model.eval()
 
     predictions: list[str] = []
-    autocast_enabled = device.type == "cuda"
+    amp_enabled = device.type == "cuda"
 
     for batch in tqdm(loader, desc="Inference"):
-        with torch.autocast(device_type=device.type, enabled=autocast_enabled):
+        with torch.autocast(device_type=device.type, enabled=amp_enabled, dtype=torch.bfloat16):
             batch_predictions, _ = compute_predictions(
                 model=model,
                 batch=batch,

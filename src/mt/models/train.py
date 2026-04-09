@@ -10,7 +10,7 @@ from ignite.metrics import Metric
 from ignite.metrics.metric import BatchWise
 from sacrebleu.metrics import BLEU
 from torch import Tensor
-from torch.amp import GradScaler, autocast
+from torch.amp import autocast
 from torch.nn import CrossEntropyLoss
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Optimizer
@@ -135,7 +135,6 @@ def create_trainer(
 ) -> Engine:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     use_amp = device.type == "cuda"
-    scaler = GradScaler(device.type, enabled=use_amp)
     model.to(device)
 
     def train_step(engine: Engine, batch: dict[str, Tensor]) -> dict[str, Any]:
@@ -143,14 +142,12 @@ def create_trainer(
         model.train()
         optimizer.zero_grad(set_to_none=True)
 
-        with autocast(device_type=device.type, enabled=use_amp):
+        with autocast(device_type=device.type, enabled=use_amp, dtype=torch.bfloat16):
             loss = compute_loss(model, batch, criterion=criterion, device=device)
 
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
+        loss.backward()
         grad_norm = clip_grad_norm_(model.parameters(), max_grad_norm)
-        scaler.step(optimizer)
-        scaler.update()
+        optimizer.step()
         scheduler.step()
 
         return {
