@@ -180,7 +180,7 @@ def create_evaluator(
         _ = engine
         model.eval()
 
-        with autocast(device_type=device.type, enabled=use_amp):
+        with autocast(device_type=device.type, enabled=use_amp, dtype=torch.bfloat16):
             loss = compute_loss(model, batch, criterion=criterion, device=device)
             predictions, references = compute_predictions(
                 model,
