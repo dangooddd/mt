@@ -38,7 +38,8 @@ def main():
         load_from_cache_file=False,
     )
 
-    scored.save_to_disk(Path(args.dataset_path).with_suffix(f".validated-{args.column}"))
+    dataset_path = Path(args.dataset_path)
+    scored.save_to_disk(dataset_path.parent / f"{dataset_path.name}-validated-{args.column}")
 
 
 if __name__ == "__main__":

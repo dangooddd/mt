@@ -4,16 +4,15 @@ from argparse import ArgumentParser
 from pathlib import Path
 from typing import Any, cast
 
+import evaluate
 import torch
 import transformers
 from datasets import Dataset, DatasetDict, load_from_disk
 from sacrebleu.metrics import BLEU, CHRF
-from sentence_transformers import SentenceTransformer
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 from tqdm import tqdm
 
-from mt.dataset.score import add_similarity_scores
 from mt.tokenizers import BaseTokenizer, get_tokenizer
 
 from .luong import LuongSeq2Seq
@@ -30,8 +29,8 @@ MODEL_CLASSES = {
 SRC_COLUMN = "ru"
 TGT_COLUMN = "en"
 BATCH_SIZE = 64
-SIMILARITY_BATCH_SIZE = 512
-SIMILARITY_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
+SCORE_BATCH_SIZE = 8
+SCORE_MODEL_NAME = "Unbabel/wmt23-comet-da-xl"
 
 
 def load_split(dataset_path: str, split: str) -> Dataset:
@@ -145,19 +144,48 @@ def generate_predictions(
     return predictions
 
 
+def add_similarity_scores(
+    batch, metric, model: str, batch_size: int, feature_name: str, lhs: str, rhs: str, ref: str
+):
+    sources = [x if x is not None else "" for x in batch[lhs]]
+    predictions = [x if x is not None else "" for x in batch[rhs]]
+    references = [x if x is not None else "" for x in batch[ref]]
+
+    result = metric.compute(
+        predictions=predictions,
+        sources=sources,
+        references=references,
+        model=model,
+        batch_size=batch_size,
+        gpus=1 if torch.cuda.is_available() else 0,
+        progress_bar=False,
+    )
+    return {feature_name: result["scores"]}
+
+
 def add_scores(
-    dataset: Dataset, model: SentenceTransformer, feature_name: str, lhs: str, rhs: str
+    dataset: Dataset,
+    metric,
+    model: str,
+    batch_size: int,
+    feature_name: str,
+    lhs: str,
+    rhs: str,
+    ref: str,
 ) -> Dataset:
     return dataset.map(
         add_similarity_scores,
         fn_kwargs={
+            "metric": metric,
             "model": model,
+            "batch_size": batch_size,
             "feature_name": feature_name,
             "lhs": lhs,
             "rhs": rhs,
+            "ref": ref,
         },
         batched=True,
-        batch_size=SIMILARITY_BATCH_SIZE,
+        batch_size=batch_size,
         load_from_cache_file=False,
     )
 
@@ -202,14 +230,22 @@ def main() -> None:
         device=device,
     )
 
-    similarity_model = SentenceTransformer(SIMILARITY_MODEL_NAME, device=str(device))
+    comet_metric = evaluate.load("comet")
 
     references = cast(list[str | None], dataset[TGT_COLUMN])
     references_text = [text or "" for text in references]
 
     scored = dataset.add_column("prediction", predictions)
-    scored = add_scores(scored, similarity_model, "prediction_ru_score", SRC_COLUMN, "prediction")
-    scored = add_scores(scored, similarity_model, "prediction_en_score", TGT_COLUMN, "prediction")
+    scored = add_scores(
+        dataset=scored,
+        metric=comet_metric,
+        model=SCORE_MODEL_NAME,
+        batch_size=SCORE_BATCH_SIZE,
+        feature_name="prediction_score",
+        lhs=SRC_COLUMN,
+        rhs="prediction",
+        ref=TGT_COLUMN,
+    )
 
     bleu = BLEU().corpus_score(predictions, [references_text]).score
     chrf = CHRF().corpus_score(predictions, [references_text]).score

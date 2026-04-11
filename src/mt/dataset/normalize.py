@@ -19,7 +19,8 @@ def main():
     )
 
     print("New schema:", dataset, sep="\n")
-    dataset.save_to_disk(Path(args.dataset_path).with_suffix(".normalized"))
+    dataset_path = Path(args.dataset_path)
+    dataset.save_to_disk(dataset_path.parent / f"{dataset_path.name}-normalized")
 
 
 if __name__ == "__main__":

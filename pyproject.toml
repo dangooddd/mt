@@ -12,11 +12,12 @@ dependencies = [
     "pytorch-ignite>=0.5.3",
     "openai>=2.29.0",
     "pydantic>=2.12.5",
-    "sentence-transformers>=5.3.0",
     "tensorboard>=2.20.0",
     "torch>=2.10.0",
     "tqdm>=4.67.3",
     "sacrebleu>=2.6.0",
+    "evaluate>=0.4.6",
+    "unbabel-comet>=2.2.7",
 ]
 
 [tool.ruff]
