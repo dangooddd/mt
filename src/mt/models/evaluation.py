@@ -1,8 +1,7 @@
 import csv
-import json
 from argparse import ArgumentParser
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import evaluate
 import torch
@@ -13,21 +12,11 @@ from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 from tqdm import tqdm
 
-from mt.tokenizers import BaseTokenizer, get_tokenizer
+from mt.tokenizers import BaseTokenizer
 
-from .luong import LuongSeq2Seq
-from .mamba import MambaSeq2Seq
-from .ssm import S4Seq2Seq
-from .train import CollateFn, Models, compute_predictions
+from . import Models, load_from_config
+from .train import CollateFn, compute_predictions
 
-MODEL_CLASSES = {
-    "luong": LuongSeq2Seq,
-    "mamba": MambaSeq2Seq,
-    "ssm": S4Seq2Seq,
-}
-
-SRC_COLUMN = "ru"
-TGT_COLUMN = "en"
 BATCH_SIZE = 64
 SCORE_BATCH_SIZE = 8
 SCORE_MODEL_NAME = "Unbabel/wmt23-comet-da-xl"
@@ -44,58 +33,6 @@ def load_split(dataset_path: str, split: str) -> Dataset:
     return dataset
 
 
-def resolve_tokenizer(config: dict[str, Any], config_key: str, file_path: Path) -> BaseTokenizer:
-    tokenizer_type = config.get(config_key, "unigram")
-    if not isinstance(tokenizer_type, str):
-        raise ValueError(f"{config_key} must be a string tokenizer type")
-    return get_tokenizer(model=tokenizer_type, file=file_path)
-
-
-def instantiate_model(
-    model_dir: Path,
-) -> tuple[Models, BaseTokenizer, BaseTokenizer, dict[str, Any]]:
-    config_path = model_dir / "config.json"
-    model_path = model_dir / "model.pt"
-    ru_tokenizer_path = model_dir / "src_tokenizer.json"
-    en_tokenizer_path = model_dir / "tgt_tokenizer.json"
-
-    for path in [config_path, model_path, ru_tokenizer_path, en_tokenizer_path]:
-        if not path.exists():
-            raise FileNotFoundError(f"Required file not found: {path}")
-
-    config = cast(dict[str, Any], json.loads(config_path.read_text()))
-
-    class_name = config.get("class") or config.get("name") or config.get("model")
-    if class_name not in MODEL_CLASSES:
-        raise ValueError(f"Unknown model class '{class_name}'. Supported: {sorted(MODEL_CLASSES)}")
-
-    model_args = dict(config.get("args") or config.get("model_args") or {})
-    src_tokenizer = resolve_tokenizer(config, "src_tokenizer", ru_tokenizer_path)
-    tgt_tokenizer = resolve_tokenizer(config, "tgt_tokenizer", en_tokenizer_path)
-
-    model_args["src_vocab_size"] = src_tokenizer.get_vocab_size()
-    model_args["tgt_vocab_size"] = tgt_tokenizer.get_vocab_size()
-    model_args["src_pad_token_id"] = src_tokenizer.pad_token_id
-    model_args["tgt_pad_token_id"] = tgt_tokenizer.pad_token_id
-    model_args["tgt_bos_token_id"] = tgt_tokenizer.bos_token_id
-    model_args["tgt_eos_token_id"] = tgt_tokenizer.eos_token_id
-
-    model = MODEL_CLASSES[class_name](**model_args)
-
-    checkpoint = torch.load(model_path, map_location="cpu")
-    if (
-        isinstance(checkpoint, dict)
-        and "model" in checkpoint
-        and isinstance(checkpoint["model"], dict)
-    ):
-        state_dict = checkpoint["model"]
-    else:
-        state_dict = checkpoint
-
-    model.load_state_dict(state_dict)
-    return model, src_tokenizer, tgt_tokenizer, config
-
-
 @torch.inference_mode()
 def generate_predictions(
     dataset: Dataset,
@@ -105,12 +42,14 @@ def generate_predictions(
     batch_size: int,
     max_length: int,
     device: torch.device,
+    src_column: str,
+    tgt_column: str,
 ) -> list[str]:
     collate_fn = CollateFn(
         src_tokenizer=src_tokenizer,
         tgt_tokenizer=tgt_tokenizer,
-        src_column=SRC_COLUMN,
-        tgt_column=TGT_COLUMN,
+        src_column=src_column,
+        tgt_column=tgt_column,
         max_src_length=max_length,
         max_tgt_length=max_length,
     )
@@ -145,11 +84,11 @@ def generate_predictions(
 
 
 def add_similarity_scores(
-    batch, metric, model: str, batch_size: int, feature_name: str, lhs: str, rhs: str, ref: str
+    batch, metric, model: str, batch_size: int, feature_name: str, src: str, pred: str, tgt: str
 ):
-    sources = [x if x is not None else "" for x in batch[lhs]]
-    predictions = [x if x is not None else "" for x in batch[rhs]]
-    references = [x if x is not None else "" for x in batch[ref]]
+    sources = [x if x is not None else "" for x in batch[src]]
+    predictions = [x if x is not None else "" for x in batch[pred]]
+    references = [x if x is not None else "" for x in batch[tgt]]
 
     result = metric.compute(
         predictions=predictions,
@@ -160,62 +99,36 @@ def add_similarity_scores(
         gpus=1 if torch.cuda.is_available() else 0,
         progress_bar=False,
     )
+
     return {feature_name: result["scores"]}
 
 
-def add_scores(
-    dataset: Dataset,
-    metric,
-    model: str,
-    batch_size: int,
-    feature_name: str,
-    lhs: str,
-    rhs: str,
-    ref: str,
-) -> Dataset:
-    return dataset.map(
-        add_similarity_scores,
-        fn_kwargs={
-            "metric": metric,
-            "model": model,
-            "batch_size": batch_size,
-            "feature_name": feature_name,
-            "lhs": lhs,
-            "rhs": rhs,
-            "ref": ref,
-        },
-        batched=True,
-        batch_size=batch_size,
-        load_from_cache_file=False,
-    )
-
-
-def save_metrics(path: Path, bleu: float, chrf: float) -> None:
+def save_metrics(path: Path, bleu: float, chrf: float, comet: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as fh:
         writer = csv.writer(fh)
         writer.writerow(["metric", "value"])
         writer.writerow(["bleu", bleu])
         writer.writerow(["chrf", chrf])
+        writer.writerow(["comet", comet])
 
 
 def main() -> None:
     parser = ArgumentParser("Evaluate mt.models checkpoint on a dataset split")
-    parser.add_argument(
-        "--model-dir",
-        type=str,
-        required=True,
-        help="Path to model dir with config.json, model.pt, ru_tokenizer.json, en_tokenizer.json",
-    )
+    parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--dataset-path", type=str, required=True)
     parser.add_argument("--split", type=str, required=True)
     parser.add_argument("--output-path", type=str, required=True)
+    parser.add_argument("--src", type=str, default="ru")
+    parser.add_argument("--tgt", type=str, default="en")
+    parser.add_argument("--pred", type=str, default="prediction")
     args = parser.parse_args()
     transformers.logging.set_verbosity_error()
 
-    model_dir = Path(args.model_dir)
     dataset = load_split(args.dataset_path, args.split)
-    model, src_tokenizer, tgt_tokenizer, runtime_config = instantiate_model(model_dir)
+    model, src_tokenizer, tgt_tokenizer, runtime_config = load_from_config(
+        args.model_dir, load_weights=True
+    )
 
     max_length = int(runtime_config.get("max_length", 256))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -228,35 +141,42 @@ def main() -> None:
         batch_size=BATCH_SIZE,
         max_length=max_length,
         device=device,
+        src_column=args.src,
+        tgt_column=args.tgt,
     )
+    dataset = dataset.add_column(args.pred, predictions)
 
-    comet_metric = evaluate.load("comet")
+    metric = evaluate.load("comet")
 
-    references = cast(list[str | None], dataset[TGT_COLUMN])
-    references_text = [text or "" for text in references]
-
-    scored = dataset.add_column("prediction", predictions)
-    scored = add_scores(
-        dataset=scored,
-        metric=comet_metric,
-        model=SCORE_MODEL_NAME,
+    dataset = dataset.map(
+        add_similarity_scores,
+        fn_kwargs={
+            "metric": metric,
+            "model": SCORE_MODEL_NAME,
+            "batch_size": SCORE_BATCH_SIZE,
+            "feature_name": f"{args.pred}_score",
+            "src": args.src,
+            "pred": args.pred,
+            "tgt": args.tgt,
+        },
+        batched=True,
         batch_size=SCORE_BATCH_SIZE,
-        feature_name="prediction_score",
-        lhs=SRC_COLUMN,
-        rhs="prediction",
-        ref=TGT_COLUMN,
+        load_from_cache_file=False,
     )
 
+    references = dataset[args.tgt]
+    references_text = [text or "" for text in references]
     bleu = BLEU().corpus_score(predictions, [references_text]).score
     chrf = CHRF().corpus_score(predictions, [references_text]).score
+    comet = sum(cast(list[float], dataset[f"{args.pred}_score"])) / len(dataset)
 
     output_path = Path(args.output_path)
-    scored.save_to_disk(str(output_path))
-    save_metrics(output_path / "metrics.csv", bleu=bleu, chrf=chrf)
+    dataset.save_to_disk(str(output_path))
+    save_metrics(output_path / "metrics.csv", bleu=bleu, chrf=chrf, comet=comet)
 
     print(f"Saved scored split to: {output_path}")
     print(f"Saved metrics to: {output_path / 'metrics.csv'}")
-    print(f"BLEU={bleu:.4f} CHRF={chrf:.4f}")
+    print(f"BLEU={bleu:.4f} CHRF={chrf:.4f} COMET={comet:.4f}")
 
 
 if __name__ == "__main__":

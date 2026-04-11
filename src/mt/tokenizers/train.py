@@ -3,7 +3,7 @@ from pathlib import Path
 
 from datasets import load_from_disk
 
-from . import get_tokenizer
+from . import TOKENIZER_CLASSES
 
 
 def main():
@@ -17,7 +17,11 @@ def main():
     Path(args.output_path).parent.mkdir(exist_ok=True, parents=True)
 
     dataset = load_from_disk(args.dataset_path)["train"]
-    tokenizer = get_tokenizer(args.model)
+
+    if args.model not in TOKENIZER_CLASSES:
+        raise ValueError(f"Unknown tokenizer. Supported: {list(TOKENIZER_CLASSES.keys())}")
+
+    tokenizer = TOKENIZER_CLASSES[args.model]()
     tokenizer.train_from_iterator(dataset[args.lang], args.vocab_size)
     tokenizer.save(args.output_path)
 

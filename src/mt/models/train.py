@@ -18,11 +18,7 @@ from torch.optim.lr_scheduler import LRScheduler
 from torch.types import Device
 
 from ..tokenizers import BaseTokenizer
-from .luong import LuongSeq2Seq
-from .mamba import MambaSeq2Seq
-from .ssm import S4Seq2Seq
-
-Models = LuongSeq2Seq | S4Seq2Seq | MambaSeq2Seq
+from . import Models
 
 
 class OutputMetric(Metric):
