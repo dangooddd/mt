@@ -16,7 +16,6 @@ dependencies = [
     "torch>=2.10.0",
     "tqdm>=4.67.3",
     "sacrebleu>=2.6.0",
-    "evaluate[comet]>=0.4.6",
     "unbabel-comet>=2.2.7",
 ]
 
