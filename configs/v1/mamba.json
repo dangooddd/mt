@@ -1,0 +1,13 @@
+{
+  "model": "mamba",
+  "args": {
+    "embedding_dim": 512,
+    "hidden_dim": 512,
+    "num_layers": 5,
+    "num_heads": 8,
+    "d_state": 16,
+    "d_conv": 4,
+    "expand": 2,
+    "dt_rank": null
+  }
+}
