@@ -32,6 +32,7 @@ def add_scores(
         gpus=1 if torch.cuda.is_available() else 0,
         progress_bar=True,
         accelerator="cpu" if not torch.cuda.is_available() else "auto",
+        num_workers=0,
     )
 
     return dataset.add_column(feature_name, result.scores), result.system_score
