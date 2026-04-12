@@ -4,26 +4,27 @@ from pathlib import Path
 import torch
 import transformers
 from comet import download_model, load_from_checkpoint
-from datasets import Dataset, DatasetDict, load_from_disk
+from datasets import DatasetDict, load_from_disk
 
 MODEL_NAME = "Unbabel/wmt22-cometkiwi-da"
 BATCH_SIZE = 100
+MAP_BATCH_SIZE = 50_000
 
 
 def add_scores(
-    dataset: Dataset,
+    batch: dict[str, list[str | None]],
     scorer,
     batch_size: int,
     feature_name: str,
     src: str,
     tgt: str,
-) -> tuple[Dataset, float]:
+) -> dict[str, list[float]]:
     samples = [
         {
             "src": source if source is not None else "",
             "mt": prediction if prediction is not None else "",
         }
-        for source, prediction in zip(dataset[src], dataset[tgt], strict=True)
+        for source, prediction in zip(batch[src], batch[tgt], strict=True)
     ]
 
     result = scorer.predict(
@@ -35,7 +36,7 @@ def add_scores(
         num_workers=0,
     )
 
-    return dataset.add_column(feature_name, result.scores), result.system_score
+    return {feature_name: result.scores}
 
 
 def main():
@@ -56,25 +57,37 @@ def main():
     if isinstance(dataset, DatasetDict):
         scored = DatasetDict()
         for split, split_dataset in dataset.items():
-            split_scored, split_score_mean = add_scores(
-                dataset=split_dataset,
-                scorer=scorer,
-                batch_size=args.batch_size,
-                feature_name=args.feature_name,
-                src=args.src,
-                tgt=args.tgt,
+            split_scored = split_dataset.map(
+                add_scores,
+                batched=True,
+                batch_size=MAP_BATCH_SIZE,
+                fn_kwargs={
+                    "scorer": scorer,
+                    "batch_size": args.batch_size,
+                    "feature_name": args.feature_name,
+                    "src": args.src,
+                    "tgt": args.tgt,
+                },
             )
+            split_scores = split_scored[args.feature_name]
+            split_score_mean = sum(split_scores) / len(split_scores) if split_scores else float("nan")
             scored[split] = split_scored
             print(f"{split}: COMET={split_score_mean:.4f}")
     else:
-        scored, score_mean = add_scores(
-            dataset=dataset,
-            scorer=scorer,
-            batch_size=args.batch_size,
-            feature_name=args.feature_name,
-            src=args.src,
-            tgt=args.tgt,
+        scored = dataset.map(
+            add_scores,
+            batched=True,
+            batch_size=MAP_BATCH_SIZE,
+            fn_kwargs={
+                "scorer": scorer,
+                "batch_size": args.batch_size,
+                "feature_name": args.feature_name,
+                "src": args.src,
+                "tgt": args.tgt,
+            },
         )
+        scores = scored[args.feature_name]
+        score_mean = sum(scores) / len(scores) if scores else float("nan")
         print(f"COMET={score_mean:.4f}")
 
     dataset_path = Path(args.dataset_path)
