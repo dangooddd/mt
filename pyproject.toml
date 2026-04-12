@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "dangooddd", email = "dangoodds@gmail.com" }
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "datasets>=4.8.3",
     "pytorch-ignite>=0.5.3",
@@ -16,7 +16,7 @@ dependencies = [
     "torch>=2.10.0",
     "tqdm>=4.67.3",
     "sacrebleu>=2.6.0",
-    "evaluate>=0.4.6",
+    "evaluate[comet]>=0.4.6",
     "unbabel-comet>=2.2.7",
 ]
 

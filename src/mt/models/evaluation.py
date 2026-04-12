@@ -3,9 +3,9 @@ from argparse import ArgumentParser
 from pathlib import Path
 from typing import cast
 
-import evaluate
 import torch
 import transformers
+from comet import download_model, load_from_checkpoint
 from datasets import Dataset, DatasetDict, load_from_disk
 from sacrebleu.metrics import BLEU, CHRF
 from torch.utils.data import DataLoader
@@ -18,8 +18,8 @@ from . import Models, load_from_config
 from .train import CollateFn, compute_predictions
 
 BATCH_SIZE = 64
-SCORE_BATCH_SIZE = 8
-SCORE_MODEL_NAME = "Unbabel/wmt23-comet-da-xl"
+SCORE_BATCH_SIZE = 100
+SCORE_MODEL_NAME = "Unbabel/wmt22-comet-da"
 
 
 def load_split(dataset_path: str, split: str) -> Dataset:
@@ -83,24 +83,35 @@ def generate_predictions(
     return predictions
 
 
-def add_similarity_scores(
-    batch, metric, model: str, batch_size: int, feature_name: str, src: str, pred: str, tgt: str
-):
-    sources = [x if x is not None else "" for x in batch[src]]
-    predictions = [x if x is not None else "" for x in batch[pred]]
-    references = [x if x is not None else "" for x in batch[tgt]]
+def add_scores(
+    dataset: Dataset,
+    scorer,
+    batch_size: int,
+    feature_name: str,
+    src: str,
+    pred: str,
+    tgt: str,
+) -> tuple[Dataset, float]:
+    samples = [
+        {
+            "src": source if source is not None else "",
+            "mt": prediction if prediction is not None else "",
+            "ref": reference if reference is not None else "",
+        }
+        for source, prediction, reference in zip(
+            dataset[src], dataset[pred], dataset[tgt], strict=True
+        )
+    ]
 
-    result = metric.compute(
-        predictions=predictions,
-        sources=sources,
-        references=references,
-        model=model,
+    result = scorer.predict(
+        samples,
         batch_size=batch_size,
         gpus=1 if torch.cuda.is_available() else 0,
-        progress_bar=False,
+        progress_bar=True,
+        accelerator="cpu" if not torch.cuda.is_available() else "auto",
     )
 
-    return {feature_name: result["scores"]}
+    return dataset.add_column(feature_name, result.scores), result.system_score
 
 
 def save_metrics(path: Path, bleu: float, chrf: float, comet: float) -> None:
@@ -146,36 +157,27 @@ def main() -> None:
     )
     dataset = dataset.add_column(args.pred, predictions)
 
-    metric = evaluate.load("comet")
+    scorer = load_from_checkpoint(download_model(SCORE_MODEL_NAME))
+    scorer.eval()
 
-    dataset = dataset.map(
-        add_similarity_scores,
-        fn_kwargs={
-            "metric": metric,
-            "model": SCORE_MODEL_NAME,
-            "batch_size": SCORE_BATCH_SIZE,
-            "feature_name": f"{args.pred}_score",
-            "src": args.src,
-            "pred": args.pred,
-            "tgt": args.tgt,
-        },
-        batched=True,
+    dataset, comet = add_scores(
+        dataset=dataset,
+        scorer=scorer,
         batch_size=SCORE_BATCH_SIZE,
-        load_from_cache_file=False,
+        feature_name=f"{args.pred}_score",
+        src=args.src,
+        pred=args.pred,
+        tgt=args.tgt,
     )
 
     references = dataset[args.tgt]
     references_text = [text or "" for text in references]
     bleu = BLEU().corpus_score(predictions, [references_text]).score
     chrf = CHRF().corpus_score(predictions, [references_text]).score
-    comet = sum(cast(list[float], dataset[f"{args.pred}_score"])) / len(dataset)
 
     output_path = Path(args.output_path)
     dataset.save_to_disk(str(output_path))
     save_metrics(output_path / "metrics.csv", bleu=bleu, chrf=chrf, comet=comet)
-
-    print(f"Saved scored split to: {output_path}")
-    print(f"Saved metrics to: {output_path / 'metrics.csv'}")
     print(f"BLEU={bleu:.4f} CHRF={chrf:.4f} COMET={comet:.4f}")
 
 
