@@ -7,8 +7,8 @@ from comet import download_model, load_from_checkpoint
 from datasets import DatasetDict, load_from_disk
 
 MODEL_NAME = "Unbabel/wmt22-cometkiwi-da"
-BATCH_SIZE = 100
-MAP_BATCH_SIZE = 50_000
+BATCH_SIZE = 32
+MAP_BATCH_SIZE = 50000
 
 
 def add_scores(
@@ -70,7 +70,9 @@ def main():
                 },
             )
             split_scores = split_scored[args.feature_name]
-            split_score_mean = sum(split_scores) / len(split_scores) if split_scores else float("nan")
+            split_score_mean = (
+                sum(split_scores) / len(split_scores) if split_scores else float("nan")
+            )
             scored[split] = split_scored
             print(f"{split}: COMET={split_score_mean:.4f}")
     else:
