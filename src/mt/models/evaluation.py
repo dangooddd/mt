@@ -19,6 +19,7 @@ from .train import CollateFn, compute_predictions
 
 BATCH_SIZE = 64
 SCORE_BATCH_SIZE = 100
+SCORE_MAP_BATCH_SIZE = 50000
 SCORE_MODEL_NAME = "Unbabel/wmt22-comet-da"
 
 
@@ -84,23 +85,21 @@ def generate_predictions(
 
 
 def add_scores(
-    dataset: Dataset,
+    batch: dict[str, list[str | None]],
     scorer,
     batch_size: int,
     feature_name: str,
     src: str,
     pred: str,
     tgt: str,
-) -> tuple[Dataset, float]:
+) -> dict[str, list[float]]:
     samples = [
         {
             "src": source if source is not None else "",
             "mt": prediction if prediction is not None else "",
             "ref": reference if reference is not None else "",
         }
-        for source, prediction, reference in zip(
-            dataset[src], dataset[pred], dataset[tgt], strict=True
-        )
+        for source, prediction, reference in zip(batch[src], batch[pred], batch[tgt], strict=True)
     ]
 
     result = scorer.predict(
@@ -109,9 +108,10 @@ def add_scores(
         gpus=1 if torch.cuda.is_available() else 0,
         progress_bar=True,
         accelerator="cpu" if not torch.cuda.is_available() else "auto",
+        num_workers=0,
     )
 
-    return dataset.add_column(feature_name, result.scores), result.system_score
+    return {feature_name: result.scores}
 
 
 def save_metrics(path: Path, bleu: float, chrf: float, comet: float) -> None:
@@ -137,11 +137,11 @@ def main() -> None:
     transformers.logging.set_verbosity_error()
 
     dataset = load_split(args.dataset_path, args.split)
-    model, src_tokenizer, tgt_tokenizer, runtime_config = load_from_config(
+    model, src_tokenizer, tgt_tokenizer, config = load_from_config(
         args.model_dir, load_weights=True
     )
 
-    max_length = int(runtime_config.get("max_length", 256))
+    max_length = int(config.get("max_length", 256))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     predictions = generate_predictions(
@@ -160,20 +160,25 @@ def main() -> None:
     scorer = load_from_checkpoint(download_model(SCORE_MODEL_NAME))
     scorer.eval()
 
-    dataset, comet = add_scores(
-        dataset=dataset,
-        scorer=scorer,
-        batch_size=SCORE_BATCH_SIZE,
-        feature_name=f"{args.pred}_score",
-        src=args.src,
-        pred=args.pred,
-        tgt=args.tgt,
+    dataset = dataset.map(
+        add_scores,
+        batched=True,
+        batch_size=SCORE_MAP_BATCH_SIZE,
+        fn_kwargs={
+            "scorer": scorer,
+            "batch_size": SCORE_BATCH_SIZE,
+            "feature_name": f"{args.pred}_score",
+            "src": args.src,
+            "pred": args.pred,
+            "tgt": args.tgt,
+        },
     )
 
-    references = dataset[args.tgt]
-    references_text = [text or "" for text in references]
+    references_text = [text or "" for text in dataset[args.tgt]]
     bleu = BLEU().corpus_score(predictions, [references_text]).score
     chrf = CHRF().corpus_score(predictions, [references_text]).score
+    comet_scores = dataset[f"{args.pred}_score"]
+    comet = sum(comet_scores) / len(comet_scores)
 
     output_path = Path(args.output_path)
     dataset.save_to_disk(str(output_path))

@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 import transformers
 from comet import download_model, load_from_checkpoint
-from datasets import DatasetDict, load_from_disk
+from datasets import load_from_disk
 
 MODEL_NAME = "Unbabel/wmt22-cometkiwi-da"
 BATCH_SIZE = 32
@@ -54,43 +54,18 @@ def main():
     scorer = load_from_checkpoint(download_model(args.model))
     scorer.eval()
 
-    if isinstance(dataset, DatasetDict):
-        scored = DatasetDict()
-        for split, split_dataset in dataset.items():
-            split_scored = split_dataset.map(
-                add_scores,
-                batched=True,
-                batch_size=MAP_BATCH_SIZE,
-                fn_kwargs={
-                    "scorer": scorer,
-                    "batch_size": args.batch_size,
-                    "feature_name": args.feature_name,
-                    "src": args.src,
-                    "tgt": args.tgt,
-                },
-            )
-            split_scores = split_scored[args.feature_name]
-            split_score_mean = (
-                sum(split_scores) / len(split_scores) if split_scores else float("nan")
-            )
-            scored[split] = split_scored
-            print(f"{split}: COMET={split_score_mean:.4f}")
-    else:
-        scored = dataset.map(
-            add_scores,
-            batched=True,
-            batch_size=MAP_BATCH_SIZE,
-            fn_kwargs={
-                "scorer": scorer,
-                "batch_size": args.batch_size,
-                "feature_name": args.feature_name,
-                "src": args.src,
-                "tgt": args.tgt,
-            },
-        )
-        scores = scored[args.feature_name]
-        score_mean = sum(scores) / len(scores) if scores else float("nan")
-        print(f"COMET={score_mean:.4f}")
+    scored = dataset.map(
+        add_scores,
+        batched=True,
+        batch_size=MAP_BATCH_SIZE,
+        fn_kwargs={
+            "scorer": scorer,
+            "batch_size": args.batch_size,
+            "feature_name": args.feature_name,
+            "src": args.src,
+            "tgt": args.tgt,
+        },
+    )
 
     dataset_path = Path(args.dataset_path)
     output_path = dataset_path.parent / f"{dataset_path.name}-scored"
