@@ -6,7 +6,13 @@ from datasets import load_from_disk
 from transformers import pipeline
 
 transformers.logging.set_verbosity_error()
-pipe = pipeline("text-classification", model="papluca/xlm-roberta-base-language-detection")
+BATCH_SIZE = 1024
+
+pipe = pipeline(
+    "text-classification",
+    model="papluca/xlm-roberta-base-language-detection",
+    batch_size=32,
+)
 
 
 def add_language_validation(batch, feature_name: str, column: str, expected: str):
@@ -34,7 +40,7 @@ def main():
             "expected": args.expected,
         },
         batched=True,
-        batch_size=1000,
+        batch_size=BATCH_SIZE,
         load_from_cache_file=False,
     )
 

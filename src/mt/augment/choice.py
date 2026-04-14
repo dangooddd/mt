@@ -5,18 +5,31 @@ from datasets import DatasetDict, load_from_disk
 
 
 def keep_aug(example):
-    if example["aug_message"] == "" and len(example["aug_ru"]) > 0 and len(example["aug_en"]) > 0:
-        return {"ru": example["aug_ru"], "en": example["aug_en"], "source": "augmentation"}
+    if example["aug"] and len(example["aug_ru"]) > 0 and len(example["aug_en"]) > 0:
+        return {
+            "ru": example["aug_ru"],
+            "en": example["aug_en"],
+            "score": example.get("aug_score"),
+            "source": example.get("source"),
+            "aug": True,
+        }
 
-    return {"ru": example["ru"], "en": example["en"], "source": "original"}
+    return {
+        "ru": example["ru"],
+        "en": example["en"],
+        "score": example.get("score"),
+        "source": example.get("source"),
+        "aug": False,
+    }
 
 
 def main():
     parser = ArgumentParser("Choose examples with valid augmentation")
-    parser.add_argument("--dataset-path", type=str)
+    parser.add_argument("--dataset-path", type=Path)
     args = parser.parse_args()
 
-    dataset = load_from_disk(args.dataset_path)
+    dataset_path = args.dataset_path
+    dataset = load_from_disk(str(dataset_path))
 
     if isinstance(dataset, DatasetDict):
         for split in list(dataset.keys()):
@@ -27,7 +40,7 @@ def main():
     else:
         dataset = dataset.map(keep_aug, remove_columns=dataset.column_names)
 
-    dataset.save_to_disk(Path(args.dataset_path).with_suffix(".choosed"))
+    dataset.save_to_disk(dataset_path.parent / f"{dataset_path.name}-choosed")
 
 
 if __name__ == "__main__":

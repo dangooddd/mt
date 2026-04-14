@@ -22,17 +22,11 @@ You are given two versions of the same content: in russian and in english langua
 Your task is to produce cleaned, corrected, and semantically aligned output for both languages.
 
 Rules:
-1. Treat the Russian text as the ground truth whenever the English text does not match the Russian text in meaning. In that case, correct the English version by translating the Russian meaning into natural English.
-2. If Russian text is meaningless, use English as ground truth. Correct the Russian version in that case.
-3. If the English and Russian texts are misaligned, incomplete, or appear to contain crawler/parsing errors, reconstruct both versions into one fully aligned, logically consistent pair. You may infer the intended full content when needed.
-4. If the texts contain typos, spelling mistakes, grammar errors, OCR noise, malformed fragments, encoding issues, or other dirty data, fix them.
-5. If the language is wrong, translate it into the correct language:
-   - the English field must contain proper English
-   - the Russian field must contain proper Russian
-   For example, if the English field contains Hindi or another non-English language, translate it into English; if the Russian field contains non-Russian text, translate it into Russian.
-6. Preserve the original meaning as much as possible, but prefer clarity, correctness, and cross-language consistency over literal wording.
-7. Remove irrelevant garbage, duplicated fragments, and broken crawler artifacts unless they are necessary for meaning.
-8. Keep the two outputs semantically equivalent after cleaning.
+1. If the texts contain typos, spelling mistakes, grammar errors, OCR noise, malformed fragments, encoding issues, or other dirty data, fix them.
+2. If the language is wrong, translate it into the correct language.
+3. Longest out of two texts is ground truth - infer missed text for second text.
+4. Remove irrelevant garbage, duplicated fragments, and artifacts unless they are necessary for meaning.
+5. Preserve the original meaning as much as possible, but prefer clarity, correctness, and cross-language consistency over literal wording.
 
 ## English version
 $en
@@ -54,7 +48,7 @@ logger = logging.getLogger("augment")
 class AugmentResult(TypedDict):
     aug_en: str
     aug_ru: str
-    aug_message: str
+    aug: bool
 
 
 @lru_cache(maxsize=1)
@@ -62,8 +56,8 @@ def get_client() -> AsyncOpenAI:
     return AsyncOpenAI(
         api_key=os.environ["OPENAI_API_KEY"],
         base_url=os.environ["OPENAI_BASE_URL"],
-        timeout=60,
-        max_retries=2,
+        timeout=240,
+        max_retries=1,
     )
 
 
@@ -100,22 +94,18 @@ async def augment(
     model: str,
     threshold: float,
 ) -> AugmentResult:
-    if (
-        example.get("aug_message", "-") == ""
-        and len(example.get("aug_ru", "")) > 0
-        and len(example.get("aug_en", "")) > 0
-    ):
+    if example.get("aug", False):
         return {
-            "aug_ru": example["aug_ru"],
-            "aug_en": example["aug_en"],
-            "aug_message": example["aug_message"],
+            "aug_ru": example.get("aug_ru") or example["ru"],
+            "aug_en": example.get("aug_en") or example["en"],
+            "aug": True,
         }
 
     if example["score"] >= threshold and example["ru_detected"] and example["en_detected"]:
         return {
             "aug_ru": "",
             "aug_en": "",
-            "aug_message": "No augmentation needed",
+            "aug": False,
         }
 
     client = get_client()
@@ -134,7 +124,7 @@ async def augment(
                 model=model,
                 messages=[message],
             ),
-            timeout=180,
+            timeout=240,
         )
 
         parsed = json.loads(response.choices[0].message.content or "{}")
@@ -142,7 +132,10 @@ async def augment(
         if (not isinstance(parsed["aug_en"], str)) or (not isinstance(parsed["aug_ru"], str)):
             raise ValueError("Model did not return correct structured output")
 
-        parsed["aug_message"] = ""
+        if len(parsed["aug_en"]) * len(parsed["aug_ru"]) == 0:
+            raise ValueError("Model did not return correct structured output")
+
+        parsed["aug"] = True
         return parsed
 
     except APIStatusError as e:
@@ -150,11 +143,11 @@ async def augment(
             raise
 
         logger.warning(f"API Error during augmentation call: {e}")
-        return {"aug_ru": "", "aug_en": "", "aug_message": str(e)}
+        return {"aug_ru": "", "aug_en": "", "aug": False}
 
     except Exception as e:
         logger.warning(f"Error during augmentation call: {e}")
-        return {"aug_ru": "", "aug_en": "", "aug_message": str(e)}
+        return {"aug_ru": "", "aug_en": "", "aug": False}
 
 
 def main():
@@ -162,10 +155,10 @@ def main():
     parser.add_argument("--model", type=str)
     parser.add_argument("--dataset-path", type=Path)
     parser.add_argument("--n-calls", default=128, type=int)
-    parser.add_argument("--save-every-n", default=512, type=int)
+    parser.add_argument("--save-every-n", default=1024, type=int)
     parser.add_argument("--save-dir", type=Path)
     parser.add_argument("--split", default="train", type=str)
-    parser.add_argument("--threshold", default=0.85, type=float)
+    parser.add_argument("--threshold", default=0.7, type=float)
     args = parser.parse_args()
 
     datasets.config.MAX_NUM_RUNNING_ASYNC_MAP_FUNCTIONS_IN_PARALLEL = args.n_calls

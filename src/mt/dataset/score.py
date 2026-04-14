@@ -8,7 +8,7 @@ from datasets import load_from_disk
 
 MODEL_NAME = "Unbabel/wmt22-cometkiwi-da"
 BATCH_SIZE = 32
-MAP_BATCH_SIZE = 50000
+MAP_BATCH_SIZE = 10000
 
 
 def add_scores(
