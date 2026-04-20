@@ -6,17 +6,19 @@ import torch
 
 from mt.tokenizers import TOKENIZER_CLASSES, BaseTokenizer
 
+from .lstm import LstmSeq2Seq
 from .luong import LuongSeq2Seq
 from .mamba import MambaSeq2Seq
 from .ssm import S4Seq2Seq
 
 MODEL_CLASSES = {
+    "lstm": LstmSeq2Seq,
     "luong": LuongSeq2Seq,
     "mamba": MambaSeq2Seq,
     "ssm": S4Seq2Seq,
 }
 
-Models = LuongSeq2Seq | MambaSeq2Seq | S4Seq2Seq
+Models = LstmSeq2Seq | LuongSeq2Seq | MambaSeq2Seq | S4Seq2Seq
 
 
 def load_from_config(
@@ -62,7 +64,7 @@ def load_from_config(
     model = MODEL_CLASSES[model_type](**model_args)
 
     if load_weights:
-        model_path = config.get("model_path")
+        model_path = model_dir / "model.pt"
         checkpoint = torch.load(model_path, map_location="cpu")
 
         if (

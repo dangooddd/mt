@@ -1,5 +1,5 @@
 from os import PathLike
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Self
 
 from tokenizers import Encoding, Tokenizer
 from tokenizers.decoders import Metaspace as MetaspaceDecoder
@@ -154,5 +154,5 @@ class BaseTokenizer:
         self.tokenizer.save(path, pretty)
 
     @classmethod
-    def from_file(cls, path: str | PathLike[str]) -> BaseTokenizer:
+    def from_file(cls, path: str | PathLike[str]) -> Self:
         return cls(Tokenizer.from_file(str(path)))

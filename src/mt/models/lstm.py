@@ -18,6 +18,7 @@ class Encoder(nn.Module):
         self.pad_token_id = pad_token_id
         self.num_layers = num_layers
         self.hidden_size = hidden_size
+        super().__init__()
 
         self.embedding = nn.Sequential(
             nn.Embedding(
@@ -45,7 +46,7 @@ class Encoder(nn.Module):
         attention_mask: torch.Tensor,
     ):
         embedding = self.embedding(input_ids)
-        length = attention_mask.sum(dim=1)
+        length = attention_mask.sum(dim=1).cpu()
         packed = pack_padded_sequence(
             embedding,
             length,
@@ -54,12 +55,12 @@ class Encoder(nn.Module):
         )
 
         outputs, (hidden, cell) = self.lstm(packed)
-        outputs = pad_packed_sequence(
+        outputs, _ = pad_packed_sequence(
             outputs,
             batch_first=True,
             total_length=input_ids.size(1),
         )
-        outputs = self.norm(outputs)
+        outputs = self.norm(outputs.float()).to(outputs.dtype)
 
         # view bidirectional states as undirectional
         # (num_layers * 2, batch, hidden_size) -> (num_layers, batch, 2 * hidden_size)
@@ -84,6 +85,8 @@ class Decoder(nn.Module):
         embedding_size: int,
         dropout: float,
     ):
+        super().__init__()
+
         self.embedding = nn.Sequential(
             nn.Embedding(
                 vocab_size,
@@ -111,7 +114,7 @@ class Decoder(nn.Module):
     ):
         embedding = cast(torch.Tensor, self.embedding(input_id).unsqueeze(1))
         output, (hidden, cell) = self.lstm(embedding, (hidden, cell))
-        return output, (hidden, cell)
+        return self.norm(output.float()).to(output.dtype), (hidden, cell)
 
 
 class LstmSeq2Seq(nn.Module):
@@ -125,19 +128,19 @@ class LstmSeq2Seq(nn.Module):
         tgt_eos_token_id: int,
         embedding_size: int = 256,
         hidden_size: int = 256,
-        encoder_layers: int = 4,
-        decoder_layers: int = 2,
+        num_layers: int = 4,
         num_heads: int = 8,
         dropout: float = 0.25,
     ):
         self.tgt_pad_token_id = tgt_pad_token_id
         self.tgt_bos_token_id = tgt_bos_token_id
         self.tgt_eos_token_id = tgt_eos_token_id
+        super().__init__()
 
         self.encoder = Encoder(
             vocab_size=src_vocab_size,
             pad_token_id=src_pad_token_id,
-            num_layers=encoder_layers,
+            num_layers=num_layers,
             hidden_size=hidden_size,
             embedding_size=embedding_size,
             dropout=dropout,
@@ -146,7 +149,7 @@ class LstmSeq2Seq(nn.Module):
         self.decoder = Decoder(
             vocab_size=tgt_vocab_size,
             pad_token_id=tgt_pad_token_id,
-            num_layers=decoder_layers,
+            num_layers=num_layers,
             hidden_size=hidden_size * 2,
             embedding_size=embedding_size,
             dropout=dropout,
@@ -159,10 +162,8 @@ class LstmSeq2Seq(nn.Module):
             batch_first=True,
         )
 
-        self.head = nn.Sequential(
-            nn.RMSNorm(hidden_size * 4),
-            nn.Linear(hidden_size * 4, tgt_vocab_size),
-        )
+        self.norm = nn.RMSNorm(hidden_size * 4)
+        self.head = nn.Linear(hidden_size * 4, tgt_vocab_size)
 
     def forward(
         self,
@@ -186,10 +187,11 @@ class LstmSeq2Seq(nn.Module):
             decoder_outputs,
             encoder_outputs,
             encoder_outputs,
-            key_padding_mask=attention_mask,
+            key_padding_mask=~attention_mask.bool(),
         )
 
         combined = torch.cat([decoder_outputs, context], dim=2)
+        combined = self.norm(combined.float()).to(combined.dtype)
         return self.head(combined)
 
     def inference(
@@ -211,7 +213,7 @@ class LstmSeq2Seq(nn.Module):
         sequences[:, 0] = self.tgt_bos_token_id
 
         decoder_input = torch.full(
-            (batch_size, 1),
+            (batch_size,),
             self.tgt_bos_token_id,
             device=device,
             dtype=torch.long,
@@ -224,16 +226,17 @@ class LstmSeq2Seq(nn.Module):
                 decoder_output,
                 encoder_outputs,
                 encoder_outputs,
-                key_padding_mask=attention_mask,
+                key_padding_mask=~attention_mask.bool(),
             )
             combined = torch.cat([decoder_output, context], dim=2)
+            combined = self.norm(combined.float()).to(combined.dtype)
             logits = self.head(combined)
-            next_token = logits.argmax(dim=-1, keepdim=True)
+            next_token = logits.argmax(dim=2).squeeze(1)
 
             mask = ~finished
-            sequences[mask, t] = next_token[mask, 0]
+            sequences[mask, t] = next_token[mask]
             decoder_input = next_token
-            finished |= next_token.squeeze(1) == self.tgt_eos_token_id
+            finished |= next_token == self.tgt_eos_token_id
 
             if finished.all():
                 break

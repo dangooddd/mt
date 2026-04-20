@@ -3,9 +3,7 @@ name = "mt"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-authors = [
-    { name = "dangooddd", email = "dangoodds@gmail.com" }
-]
+authors = [{ name = "dangooddd", email = "dangoodds@gmail.com" }]
 requires-python = ">=3.12"
 dependencies = [
     "datasets>=4.8.3",
@@ -13,10 +11,11 @@ dependencies = [
     "openai>=2.29.0",
     "pydantic>=2.12.5",
     "tensorboard>=2.20.0",
-    "torch>=2.10.0",
     "tqdm>=4.67.3",
     "sacrebleu>=2.6.0",
     "unbabel-comet>=2.2.7",
+    "torch>=2.11.0",
+    "mamba-ssm[causal-conv1d]>=2.3.1",
 ]
 
 [tool.ruff]
@@ -24,6 +23,15 @@ line-length = 100
 
 [tool.uv]
 package = true
+no-build-isolation-package = ["mamba-ssm", "causal-conv1d"]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [build-system]
 requires = ["uv_build>=0.10.11,<0.11.0"]
