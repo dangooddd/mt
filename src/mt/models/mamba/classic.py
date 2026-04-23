@@ -2,6 +2,7 @@ from typing import cast
 
 import torch
 import torch.nn as nn
+from mamba_ssm import Mamba
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 

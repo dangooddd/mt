@@ -6,8 +6,7 @@ import torch
 
 from mt.tokenizers import TOKENIZER_CLASSES, BaseTokenizer
 
-from .lstm import LstmSeq2Seq
-from .luong import LuongSeq2Seq
+from .lstm import LstmSeq2Seq, LuongSeq2Seq
 from .mamba import MambaSeq2Seq
 from .ssm import S4Seq2Seq
 
