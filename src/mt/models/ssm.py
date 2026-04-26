@@ -11,7 +11,7 @@ def _next_power_of_two(n: int) -> int:
 
 
 def causal_fft_conv1d(u: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
-    orig_dtype = u.dtype
+    dtype = u.dtype
     _, _, length = u.shape
     n_fft = _next_power_of_two(2 * length - 1)
 
@@ -19,7 +19,7 @@ def causal_fft_conv1d(u: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
     k_f = torch.fft.rfft(k.float(), n=n_fft, dim=-1)
 
     y = torch.fft.irfft(u_f * k_f.unsqueeze(0), n=n_fft, dim=-1)
-    return y[..., :length].to(orig_dtype)
+    return y[..., :length].to(dtype)
 
 
 def reverse_padded_sequence(x: Tensor, lengths: Tensor) -> Tensor:
