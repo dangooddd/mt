@@ -12,13 +12,19 @@ from torch.utils.data import DataLoader, Dataset
 
 from mt.models import load_from_config
 from mt.models.train import (
+    BilingualCollateFn,
+    BilingualEvalCollateFn,
     CollateFn,
+    EvalCollateFn,
     attach_tensorboard_logging,
+    compute_bilingual_loss,
+    compute_bilingual_predictions,
     compute_loss,
     compute_predictions,
     create_evaluator,
     create_trainer,
 )
+from mt.tokenizers import BaseTokenizer
 
 
 def main() -> None:
@@ -46,13 +52,61 @@ def main() -> None:
     args = parser.parse_args()
 
     dataset = load_from_disk(args.dataset_path)
-    model, src_tokenizer, tgt_tokenizer, _ = load_from_config(args.model_dir)
+    model, tokenizers, _ = load_from_config(args.model_dir)
 
     optimizer = optim.AdamW(model.parameters(), lr=args.max_lr)
-    criterion = CrossEntropyLoss(
-        ignore_index=tgt_tokenizer.pad_token_id,
-        label_smoothing=args.label_smoothing,
-    )
+
+    if isinstance(tokenizers, tuple[BaseTokenizer, BaseTokenizer]):
+        src_tokenizer, tgt_tokenizer = tokenizers
+        criterion = CrossEntropyLoss(
+            ignore_index=tgt_tokenizer.pad_token_id,
+            label_smoothing=args.label_smoothing,
+        )
+        train_collate_fn = CollateFn(
+            src_tokenizer=src_tokenizer,
+            tgt_tokenizer=tgt_tokenizer,
+            max_src_length=args.max_length,
+            max_tgt_length=args.max_length,
+            src_column=args.src,
+            tgt_column=args.tgt,
+        )
+        evaluation_collate_fn = EvalCollateFn(
+            src_tokenizer=src_tokenizer,
+            max_src_length=args.max_length,
+            src_column=args.src,
+            tgt_column=args.tgt,
+        )
+        loss_fn = compute_loss
+        predictions_fn = compute_predictions
+        predictions_kwargs = {
+            "tgt_tokenizer": tgt_tokenizer,
+            "max_length": args.max_length,
+        }
+
+    else:
+        tokenizer = tokenizers
+        criterion = CrossEntropyLoss(
+            ignore_index=tokenizer.pad_token_id,
+            label_smoothing=args.label_smoothing,
+        )
+        train_collate_fn = BilingualCollateFn(
+            tokenizer=tokenizer,
+            max_length=args.max_length,
+            src_column=args.src,
+            tgt_column=args.tgt,
+        )
+        evaluation_collate_fn = BilingualEvalCollateFn(
+            tokenizer=tokenizer,
+            max_length=args.max_length,
+            src_column=args.src,
+            tgt_column=args.tgt,
+        )
+        loss_fn = compute_bilingual_loss
+        predictions_fn = compute_bilingual_predictions
+        predictions_kwargs = {
+            "tokenizer": tokenizer,
+            "max_length": args.max_length,
+        }
 
     warmup_scheduler = optim.lr_scheduler.LinearLR(
         optimizer,
@@ -73,19 +127,10 @@ def main() -> None:
         milestones=[args.warmup_steps],
     )
 
-    collate_fn = CollateFn(
-        src_tokenizer=src_tokenizer,
-        tgt_tokenizer=tgt_tokenizer,
-        max_src_length=args.max_length,
-        max_tgt_length=args.max_length,
-        src_column=args.src,
-        tgt_column=args.tgt,
-    )
-
     train_loader = DataLoader(
         cast(Dataset, dataset[args.train_split]),
         batch_size=args.batch_size,
-        collate_fn=collate_fn,
+        collate_fn=train_collate_fn,
         num_workers=0,
         shuffle=True,
     )
@@ -93,7 +138,7 @@ def main() -> None:
     evaluation_loader = DataLoader(
         cast(Dataset, dataset[args.validation_split]),
         batch_size=args.batch_size,
-        collate_fn=collate_fn,
+        collate_fn=evaluation_collate_fn,
         num_workers=0,
     )
 
@@ -102,19 +147,16 @@ def main() -> None:
         optimizer=optimizer,
         criterion=criterion,
         scheduler=scheduler,
-        compute_loss=compute_loss,
+        compute_loss=loss_fn,
         max_grad_norm=args.max_grad_norm,
     )
 
     evaluator = create_evaluator(
         model=model,
         criterion=criterion,
-        compute_loss=compute_loss,
-        compute_predictions=compute_predictions,
-        compute_predictions_kwargs={
-            "tgt_tokenizer": tgt_tokenizer,
-            "max_length": args.max_length,
-        },
+        compute_loss=loss_fn,
+        compute_predictions=predictions_fn,
+        compute_predictions_kwargs=predictions_kwargs,
     )
 
     experiment = args.experiment or args.model_dir.name
