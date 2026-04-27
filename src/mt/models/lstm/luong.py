@@ -187,9 +187,9 @@ class LuongSeq2Seq(nn.Module):
 
         _, output_length = output_ids.size()
         preds = []
-        input_id = output_ids[:, 0]  # (batch,)
 
-        for t in range(1, output_length):
+        for t in range(output_length):
+            input_id = output_ids[:, t]
             logits, hidden, cell = self.decode_step(
                 input_id,
                 hidden,
@@ -198,9 +198,8 @@ class LuongSeq2Seq(nn.Module):
                 attention_mask,
             )
             preds.append(logits)
-            input_id = output_ids[:, t]
 
-        # stack along time dimension: (batch, tgt_len-1, tgt_vocab_size)
+        # stack along time dimension: (batch, tgt_len, tgt_vocab_size)
         return torch.stack(preds, dim=1)
 
     @torch.no_grad()

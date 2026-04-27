@@ -289,10 +289,9 @@ class S4Seq2Seq(nn.Module):
     def forward(self, input_ids: Tensor, output_ids: Tensor, attention_mask: Tensor) -> Tensor:
         _, context = self.encode(input_ids, attention_mask)
 
-        decoder_input_ids = output_ids[:, :-1]
-        logits = self.decode(decoder_input_ids, context)
+        logits = self.decode(output_ids, context)
 
-        # (batch, tgt_len - 1, tgt_vocab_size)
+        # (batch, tgt_len, tgt_vocab_size)
         return logits
 
     @torch.no_grad()
