@@ -1,4 +1,5 @@
 from argparse import ArgumentParser
+from itertools import chain
 from pathlib import Path
 
 from datasets import load_from_disk
@@ -8,7 +9,7 @@ from . import TOKENIZER_CLASSES
 
 def main():
     parser = ArgumentParser("Train tokenizer on dataset")
-    parser.add_argument("--lang", type=str, default="ru")
+    parser.add_argument("--lang", nargs="+", default=["ru"])
     parser.add_argument("--model", type=str, default="unigram")
     parser.add_argument("--vocab-size", type=int, default=24000)
     parser.add_argument("--dataset-path", type=str)
@@ -22,7 +23,8 @@ def main():
         raise ValueError(f"Unknown tokenizer. Supported: {list(TOKENIZER_CLASSES.keys())}")
 
     tokenizer = TOKENIZER_CLASSES[args.model]()
-    tokenizer.train_from_iterator(dataset[args.lang], args.vocab_size)
+    iterator = chain.from_iterable(dataset[lang] for lang in args.lang)
+    tokenizer.train_from_iterator(iterator, args.vocab_size)
     tokenizer.save(args.output_path)
 
 

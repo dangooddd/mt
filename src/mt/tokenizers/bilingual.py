@@ -1,23 +1,34 @@
+from collections import defaultdict
 from os import PathLike
 from typing import Iterator, Optional, Self
 
 from tokenizers import Encoding, Tokenizer
 from tokenizers.decoders import Metaspace as MetaspaceDecoder
-from tokenizers.models import BPE, Unigram, WordPiece
+from tokenizers.models import Unigram
 from tokenizers.normalizers import NFKC
 from tokenizers.pre_tokenizers import Digits, Metaspace, Punctuation, Sequence
 from tokenizers.processors import TemplateProcessing
-from tokenizers.trainers import BpeTrainer, Trainer, UnigramTrainer, WordPieceTrainer
+from tokenizers.trainers import Trainer, UnigramTrainer
 
 
-class BaseTokenizer:
+class BilingualBaseTokenizer:
     pad_token = "<pad>"
     bos_token = "<s>"
     eos_token = "</s>"
+    sep_token = "<sep>"
     unk_token = "<unk>"
+    ru_token = "<ru>"
+    en_token = "<en>"
 
     def __init__(self, tokenizer: Optional[Tokenizer] = None):
         self.tokenizer = self._create_tokenizer() if tokenizer is None else tokenizer
+        self.post_processors = defaultdict(
+            lambda: self.post_processors["ru"],
+            {
+                "ru": self._create_post_processor("ru"),
+                "en": self._create_post_processor("en"),
+            },
+        )
 
     @property
     def pad_token_id(self) -> int:
@@ -35,9 +46,24 @@ class BaseTokenizer:
         return id if (id is not None) else 3
 
     @property
+    def sep_token_id(self) -> int:
+        id = self.tokenizer.token_to_id(self.sep_token)
+        return id if (id is not None) else 4
+
+    @property
     def unk_token_id(self) -> int:
         id = self.tokenizer.token_to_id(self.unk_token)
-        return id if (id is not None) else 4
+        return id if (id is not None) else 5
+
+    @property
+    def ru_token_id(self) -> int:
+        id = self.tokenizer.token_to_id(self.ru_token)
+        return id if (id is not None) else 6
+
+    @property
+    def en_token_id(self) -> int:
+        id = self.tokenizer.token_to_id(self.en_token)
+        return id if (id is not None) else 7
 
     def _create_model(self):
         raise NotImplementedError
@@ -55,12 +81,27 @@ class BaseTokenizer:
         tokenizer.decoder = MetaspaceDecoder()
         return tokenizer
 
-    def _create_post_processor(self):
+    def _create_post_processor(self, lang: str):
+        if lang == "ru":
+            src_token = self.ru_token
+            tgt_token = self.en_token
+        else:
+            src_token = self.en_token
+            tgt_token = self.ru_token
+
+        bos = f"{self.bos_token} {src_token}"
+        sep = f"{self.sep_token} {tgt_token}"
+        eos = f"{self.eos_token}"
+
         return TemplateProcessing(
-            single=f"{self.bos_token} $A {self.eos_token}",
+            single=f"{bos} $A {sep}",
+            pair=f"{bos} $A {sep} $B:1 {eos}:1",
             special_tokens=[
                 (self.bos_token, self.bos_token_id),
+                (self.sep_token, self.sep_token_id),
                 (self.eos_token, self.eos_token_id),
+                (self.ru_token, self.ru_token_id),
+                (self.en_token, self.en_token_id),
             ],
         )
 
@@ -69,23 +110,30 @@ class BaseTokenizer:
         vocab_size: int = 32000,
         show_progress: bool = True,
     ) -> Trainer:
+        _ = vocab_size
+        _ = show_progress
         raise NotImplementedError
+
+    def set_source_language(self, lang: str):
+        self.tokenizer.post_processor = self.post_processors[lang]
 
     def encode(
         self,
         sequence: str | list[str],
+        pair: str | list[str] | None = None,
         is_pretokenized: bool = False,
         add_special_tokens: bool = True,
     ) -> Encoding:
         return self.tokenizer.encode(
             sequence,
+            pair=pair,
             is_pretokenized=is_pretokenized,
             add_special_tokens=add_special_tokens,
         )
 
     def encode_batch(
         self,
-        input: list[str] | list[list[str]],
+        input: list[str] | list[list[str]] | list[tuple[str, str]],
         is_pretokenized: bool = False,
         add_special_tokens: bool = True,
     ) -> list[Encoding]:
@@ -135,7 +183,7 @@ class BaseTokenizer:
         )
         self.tokenizer = self._create_tokenizer()
         self.tokenizer.train_from_iterator(iterator, trainer=trainer)
-        self.tokenizer.post_processor = self._create_post_processor()
+        self.tokenizer.post_processor = self.post_processors["ru"]
 
     def train(
         self,
@@ -149,7 +197,7 @@ class BaseTokenizer:
         )
         self.tokenizer = self._create_tokenizer()
         self.tokenizer.train(files, trainer)
-        self.tokenizer.post_processor = self._create_post_processor()
+        self.tokenizer.post_processor = self.post_processors["ru"]
 
     def save(self, path: str, pretty: bool = True):
         self.tokenizer.save(path, pretty)
@@ -159,13 +207,13 @@ class BaseTokenizer:
         return cls(Tokenizer.from_file(str(path)))
 
 
-class UnigramTokenizer(BaseTokenizer):
+class BilingualUnigramTokenizer(BilingualBaseTokenizer):
     def _create_model(self):
         return Unigram()
 
     def _create_trainer(
         self,
-        vocab_size: int = 32000,
+        vocab_size: int = 64000,
         show_progress: bool = True,
     ) -> Trainer:
         return UnigramTrainer(
@@ -176,48 +224,9 @@ class UnigramTokenizer(BaseTokenizer):
                 self.pad_token,
                 self.bos_token,
                 self.eos_token,
+                self.sep_token,
                 self.unk_token,
-            ],
-        )
-
-
-class BpeTokenizer(BaseTokenizer):
-    def _create_model(self):
-        return BPE()
-
-    def _create_trainer(
-        self,
-        vocab_size: int = 32000,
-        show_progress: bool = True,
-    ) -> Trainer:
-        return BpeTrainer(
-            vocab_size=vocab_size,
-            show_progress=show_progress,
-            special_tokens=[
-                self.pad_token,
-                self.bos_token,
-                self.eos_token,
-                self.unk_token,
-            ],
-        )
-
-
-class WordPieceTokenizer(BaseTokenizer):
-    def _create_model(self):
-        return WordPiece()
-
-    def _create_trainer(
-        self,
-        vocab_size: int = 32000,
-        show_progress: bool = True,
-    ) -> Trainer:
-        return WordPieceTrainer(
-            vocab_size=vocab_size,
-            show_progress=show_progress,
-            special_tokens=[
-                self.pad_token,
-                self.bos_token,
-                self.eos_token,
-                self.unk_token,
+                self.ru_token,
+                self.en_token,
             ],
         )
