@@ -240,7 +240,7 @@ class MambaSeq2Seq(nn.Module):
         attention_mask: Tensor,
     ):
         encoder_outputs = self.encoder(input_ids, attention_mask)
-        decoder_outputs = self.decoder(output_ids[:, :-1])
+        decoder_outputs = self.decoder(output_ids)
         logits = self.head(decoder_outputs, encoder_outputs, ~attention_mask.bool())
         return logits
 

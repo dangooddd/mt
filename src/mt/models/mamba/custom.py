@@ -511,14 +511,13 @@ class MambaSeq2Seq(nn.Module):
     ) -> Tensor:
         encoder_outputs = self.encode(input_ids, attention_mask)
 
-        decoder_input_ids = output_ids[:, :-1]
         logits = self.decode(
-            decoder_input_ids,
+            output_ids,
             encoder_outputs=encoder_outputs,
             attention_mask=attention_mask,
         )
 
-        # (batch, tgt_len - 1, tgt_vocab_size)
+        # (batch, tgt_len, tgt_vocab_size)
         return logits
 
     @torch.no_grad()

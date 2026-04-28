@@ -173,12 +173,11 @@ class LstmSeq2Seq(nn.Module):
         encoder_outputs, (hidden, cell) = self.encoder(input_ids, attention_mask)
         output_length = output_ids.size(1)
         decoder_steps = []
-        decoder_input = output_ids[:, 0]
 
-        for t in range(1, output_length):
+        for t in range(output_length):
+            decoder_input = output_ids[:, t]
             decoder_output, (hidden, cell) = self.decoder(decoder_input, hidden, cell)
             decoder_steps.append(decoder_output)
-            decoder_input = output_ids[:, t]
 
         # (batch, time, hidden_size * 2)
         decoder_outputs = torch.cat(decoder_steps, dim=1)

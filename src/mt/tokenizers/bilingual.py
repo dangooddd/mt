@@ -15,7 +15,6 @@ class BilingualBaseTokenizer:
     pad_token = "<pad>"
     bos_token = "<s>"
     eos_token = "</s>"
-    sep_token = "<sep>"
     unk_token = "<unk>"
     ru_token = "<ru>"
     en_token = "<en>"
@@ -44,11 +43,6 @@ class BilingualBaseTokenizer:
     def eos_token_id(self) -> int:
         id = self.tokenizer.token_to_id(self.eos_token)
         return id if (id is not None) else 3
-
-    @property
-    def sep_token_id(self) -> int:
-        id = self.tokenizer.token_to_id(self.sep_token)
-        return id if (id is not None) else 4
 
     @property
     def unk_token_id(self) -> int:
@@ -90,15 +84,14 @@ class BilingualBaseTokenizer:
             tgt_token = self.ru_token
 
         bos = f"{self.bos_token} {src_token}"
-        sep = f"{self.sep_token} {tgt_token}"
+        sep = f"{tgt_token}"
         eos = f"{self.eos_token}"
 
         return TemplateProcessing(
             single=f"{bos} $A {sep}",
-            pair=f"{bos} $A {sep} $B:1 {eos}:1",
+            pair=f"{bos} $A {sep}:1 $B:1 {eos}:1",
             special_tokens=[
                 (self.bos_token, self.bos_token_id),
-                (self.sep_token, self.sep_token_id),
                 (self.eos_token, self.eos_token_id),
                 (self.ru_token, self.ru_token_id),
                 (self.en_token, self.en_token_id),
@@ -224,7 +217,6 @@ class BilingualUnigramTokenizer(BilingualBaseTokenizer):
                 self.pad_token,
                 self.bos_token,
                 self.eos_token,
-                self.sep_token,
                 self.unk_token,
                 self.ru_token,
                 self.en_token,

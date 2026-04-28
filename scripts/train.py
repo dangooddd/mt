@@ -56,8 +56,8 @@ def main() -> None:
 
     optimizer = optim.AdamW(model.parameters(), lr=args.max_lr)
 
-    if isinstance(tokenizers, tuple[BaseTokenizer, BaseTokenizer]):
-        src_tokenizer, tgt_tokenizer = tokenizers
+    if isinstance(tokenizers, tuple):
+        src_tokenizer, tgt_tokenizer = cast(tuple[BaseTokenizer, BaseTokenizer], tokenizers)
         criterion = CrossEntropyLoss(
             ignore_index=tgt_tokenizer.pad_token_id,
             label_smoothing=args.label_smoothing,

@@ -22,6 +22,10 @@ def main():
     if args.model not in TOKENIZER_CLASSES:
         raise ValueError(f"Unknown tokenizer. Supported: {list(TOKENIZER_CLASSES.keys())}")
 
+    print(f"Model: {args.model}")
+    print(f"Langs: {args.lang}")
+    print(f"Vocab: {args.vocab_size}")
+
     tokenizer = TOKENIZER_CLASSES[args.model]()
     iterator = chain.from_iterable(dataset[lang] for lang in args.lang)
     tokenizer.train_from_iterator(iterator, args.vocab_size)

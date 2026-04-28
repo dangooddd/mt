@@ -19,7 +19,7 @@ def main() -> None:
     parser.add_argument("--model-dir", type=Path, required=True)
     args = parser.parse_args()
 
-    model, _, _, _ = load_from_config(args.model_dir)
+    model, _, _ = load_from_config(args.model_dir)
     total, trainable = count_parameters(model)
 
     print(f"Model dir: {args.model_dir}")

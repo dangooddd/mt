@@ -7,8 +7,10 @@ from datasets import DatasetDict, load_from_disk
 from torch.profiler import ProfilerActivity, profile, record_function, schedule
 from torch.utils.data import DataLoader, Dataset
 
-from mt.models import load_from_config
-from mt.models.train import CollateFn
+from mt.tokenizers import BaseTokenizer
+
+from . import load_from_config
+from .train import BilingualCollateFn, CollateFn
 
 
 def main() -> None:
@@ -28,8 +30,8 @@ def main() -> None:
     parser.add_argument("--with-flops", action="store_true")
     args = parser.parse_args()
 
-    model, src_tokenizer, tgt_tokenizer, config = load_from_config(args.model_dir)
-    max_length = config["max_lenght"] if "max_length" in config else None
+    model, tokenizers, config = load_from_config(args.model_dir)
+    max_length = config["max_length"] if "max_length" in config else None
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     sort_by = "cuda_time_total" if device.type == "cuda" else "cpu_time_total"
     use_amp = device.type == "cuda"
@@ -37,14 +39,25 @@ def main() -> None:
     model.to(device)
     model.eval()
 
-    collate_fn = CollateFn(
-        src_tokenizer=src_tokenizer,
-        tgt_tokenizer=tgt_tokenizer,
-        src_column=args.src,
-        tgt_column=args.tgt,
-        max_src_length=max_length,
-        max_tgt_length=max_length,
-    )
+    if isinstance(tokenizers, tuple):
+        src_tokenizer, tgt_tokenizer = cast(tuple[BaseTokenizer, BaseTokenizer], tokenizers)
+        collate_fn = CollateFn(
+            src_tokenizer=src_tokenizer,
+            tgt_tokenizer=tgt_tokenizer,
+            src_column=args.src,
+            tgt_column=args.tgt,
+            max_src_length=max_length,
+            max_tgt_length=max_length,
+        )
+        bilingual = False
+    else:
+        collate_fn = BilingualCollateFn(
+            tokenizer=tokenizers,
+            src_column=args.src,
+            tgt_column=args.tgt,
+            max_length=max_length,
+        )
+        bilingual = True
 
     dataset = load_from_disk(args.dataset_path)
     data = dataset[args.split] if isinstance(dataset, DatasetDict) else dataset
@@ -66,10 +79,6 @@ def main() -> None:
         on_trace_ready = torch.profiler.tensorboard_trace_handler(str(args.trace_dir))
 
     def run_step(batch):
-        src_ids = batch["src_ids"].to(device=device)
-        src_mask = batch["src_mask"].to(device=device)
-        tgt_ids = batch["tgt_ids"].to(device=device)
-
         with (
             torch.inference_mode(),
             torch.autocast(
@@ -79,7 +88,20 @@ def main() -> None:
             ),
         ):
             with record_function("model_forward"):
-                _ = model.forward(src_ids, tgt_ids, src_mask)
+                if bilingual:
+                    input_ids = batch["input_ids"].to(device=device)
+                    attention_mask = batch["attention_mask"].to(device=device)
+                    type_ids = batch["type_ids"].to(device=device)
+                    _ = model.forward(
+                        input_ids[:, :-1],
+                        attention_mask[:, :-1],
+                        type_ids[:, :-1],
+                    )
+                else:
+                    src_ids = batch["src_ids"].to(device=device)
+                    src_mask = batch["src_mask"].to(device=device)
+                    tgt_ids = batch["tgt_ids"].to(device=device)
+                    _ = model.forward(src_ids, tgt_ids[:, :-1], src_mask)
 
     with profile(
         activities=activities,

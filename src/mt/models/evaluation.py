@@ -12,10 +12,15 @@ from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 from tqdm import tqdm
 
-from mt.tokenizers import BaseTokenizer
+from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer
 
 from . import Models, load_from_config
-from .train import CollateFn, compute_predictions
+from .train import (
+    BilingualEvalCollateFn,
+    EvalCollateFn,
+    compute_bilingual_predictions,
+    compute_predictions,
+)
 
 BATCH_SIZE = 64
 SCORE_BATCH_SIZE = 100
@@ -46,13 +51,11 @@ def generate_predictions(
     src_column: str,
     tgt_column: str,
 ) -> list[str]:
-    collate_fn = CollateFn(
+    collate_fn = EvalCollateFn(
         src_tokenizer=src_tokenizer,
-        tgt_tokenizer=tgt_tokenizer,
         src_column=src_column,
         tgt_column=tgt_column,
         max_src_length=max_length,
-        max_tgt_length=max_length,
     )
 
     loader = DataLoader(
@@ -76,6 +79,53 @@ def generate_predictions(
                 batch=batch,
                 device=device,
                 tgt_tokenizer=tgt_tokenizer,
+                max_length=max_length,
+            )
+
+        predictions.extend(batch_predictions)
+
+    return predictions
+
+
+@torch.inference_mode()
+def generate_bilingual_predictions(
+    dataset: Dataset,
+    model: Models,
+    tokenizer: BilingualBaseTokenizer,
+    batch_size: int,
+    max_length: int,
+    device: torch.device,
+    src_column: str,
+    tgt_column: str,
+) -> list[str]:
+    collate_fn = BilingualEvalCollateFn(
+        tokenizer=tokenizer,
+        src_column=src_column,
+        tgt_column=tgt_column,
+        max_length=max_length,
+    )
+
+    loader = DataLoader(
+        cast(TorchDataset, dataset),
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
+        collate_fn=collate_fn,
+    )
+
+    model.to(device)
+    model.eval()
+
+    predictions: list[str] = []
+    amp_enabled = device.type == "cuda"
+
+    for batch in tqdm(loader, desc="Inference"):
+        with torch.autocast(device_type=device.type, enabled=amp_enabled, dtype=torch.bfloat16):
+            batch_predictions, _ = compute_bilingual_predictions(
+                model=model,
+                batch=batch,
+                device=device,
+                tokenizer=tokenizer,
                 max_length=max_length,
             )
 
@@ -137,26 +187,37 @@ def main() -> None:
     transformers.logging.set_verbosity_error()
 
     dataset = load_split(args.dataset_path, args.split)
-    model, src_tokenizer, tgt_tokenizer, config = load_from_config(
-        args.model_dir, load_weights=True
-    )
+    model, tokenizers, config = load_from_config(args.model_dir, load_weights=True)
 
     max_length = int(config.get("max_length", 256))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    predictions = generate_predictions(
-        dataset=dataset,
-        model=model,
-        src_tokenizer=src_tokenizer,
-        tgt_tokenizer=tgt_tokenizer,
-        batch_size=BATCH_SIZE,
-        max_length=max_length,
-        device=device,
-        src_column=args.src,
-        tgt_column=args.tgt,
-    )
-    dataset = dataset.add_column(args.pred, predictions)
+    if isinstance(tokenizers, tuple[BaseTokenizer, BaseTokenizer]):
+        src_tokenizer, tgt_tokenizer = tokenizers
+        predictions = generate_predictions(
+            dataset=dataset,
+            model=model,
+            src_tokenizer=src_tokenizer,
+            tgt_tokenizer=tgt_tokenizer,
+            batch_size=BATCH_SIZE,
+            max_length=max_length,
+            device=device,
+            src_column=args.src,
+            tgt_column=args.tgt,
+        )
+    else:
+        predictions = generate_bilingual_predictions(
+            dataset=dataset,
+            model=model,
+            tokenizer=tokenizers,
+            batch_size=BATCH_SIZE,
+            max_length=max_length,
+            device=device,
+            src_column=args.src,
+            tgt_column=args.tgt,
+        )
 
+    dataset = dataset.add_column(args.pred, predictions)
     scorer = load_from_checkpoint(download_model(SCORE_MODEL_NAME))
     scorer.eval()
 

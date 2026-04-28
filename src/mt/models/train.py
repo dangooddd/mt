@@ -9,6 +9,7 @@ from ignite.handlers.tensorboard_logger import TensorboardLogger
 from ignite.metrics import Metric
 from ignite.metrics.metric import BatchWise
 from sacrebleu.metrics import BLEU
+from tokenizers import Encoding
 from torch import Tensor
 from torch.amp import autocast
 from torch.nn import CrossEntropyLoss
@@ -17,8 +18,8 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch.types import Device
 
-from ..tokenizers import BaseTokenizer
-from . import Models
+from ..tokenizers import BaseTokenizer, BilingualBaseTokenizer
+from . import BilingualModels, Models, Seq2SeqModels
 
 
 class OutputMetric(Metric):
@@ -65,7 +66,7 @@ class CollateFn:
         else:
             self.tgt_tokenizer.no_truncation()
 
-    def __call__(self, batch: list[dict[str, str]]) -> dict[str, Tensor]:
+    def __call__(self, batch: list[dict[str, str]]):
         src_texts = [item[self.src_column] for item in batch]
         tgt_texts = [item[self.tgt_column] for item in batch]
 
@@ -83,9 +84,155 @@ class CollateFn:
         }
 
 
+class EvalCollateFn:
+    def __init__(
+        self,
+        src_tokenizer: BaseTokenizer,
+        src_column: str = "ru",
+        tgt_column: str = "en",
+        max_src_length: int | None = None,
+    ):
+        self.src_tokenizer = src_tokenizer
+        self.src_column = src_column
+        self.tgt_column = tgt_column
+
+        self.src_tokenizer.enable_padding(direction="right")
+
+        if max_src_length is not None:
+            self.src_tokenizer.enable_truncation(max_src_length, direction="right")
+        else:
+            self.src_tokenizer.no_truncation()
+
+    def __call__(self, batch: list[dict[str, str]]):
+        src_texts = [item[self.src_column] for item in batch]
+        targets = [item[self.tgt_column] for item in batch]
+
+        src_encodings = self.src_tokenizer.encode_batch(src_texts)
+        src_ids = [encoding.ids for encoding in src_encodings]
+        src_mask = [encoding.attention_mask for encoding in src_encodings]
+
+        return {
+            "src_mask": torch.tensor(src_mask, dtype=torch.bool),
+            "src_ids": torch.tensor(src_ids, dtype=torch.long),
+            "targets": targets,
+        }
+
+
+class BilingualCollateFn:
+    def __init__(
+        self,
+        tokenizer: BilingualBaseTokenizer,
+        src_column: str = "ru",
+        tgt_column: str = "en",
+        max_length: int | None = None,
+    ):
+        self.tokenizer = tokenizer
+        self.src_column = src_column
+        self.tgt_column = tgt_column
+
+        self.tokenizer.enable_padding(direction="right")
+
+        if max_length is not None:
+            self.tokenizer.enable_truncation(max_length, direction="right")
+        else:
+            self.tokenizer.no_truncation()
+
+    def _pad(
+        self,
+        encodings: list[Encoding],
+    ) -> tuple[list[list[int]], list[list[int]], list[list[int]]]:
+        max_length = max(len(encoding.ids) for encoding in encodings)
+        input_ids = []
+        attention_mask = []
+        type_ids = []
+
+        for encoding in encodings:
+            pad = max_length - len(encoding.ids)
+            input_ids.append(encoding.ids + [self.tokenizer.pad_token_id] * pad)
+            attention_mask.append(encoding.attention_mask + [0] * pad)
+            type_ids.append(encoding.type_ids + [0] * pad)
+
+        return input_ids, attention_mask, type_ids
+
+    def __call__(self, batch: list[dict[str, str]]) -> dict[str, Tensor]:
+        src_texts = [item[self.src_column] for item in batch]
+        tgt_texts = [item[self.tgt_column] for item in batch]
+
+        self.tokenizer.set_source_language(self.src_column)
+        encodings = self.tokenizer.encode_batch(list(zip(src_texts, tgt_texts)))
+
+        self.tokenizer.set_source_language(self.tgt_column)
+        encodings += self.tokenizer.encode_batch(list(zip(tgt_texts, src_texts)))
+        input_ids, attention_mask, type_ids = self._pad(encodings)
+
+        return {
+            "input_ids": torch.tensor(input_ids, dtype=torch.long),
+            "attention_mask": torch.tensor(attention_mask, dtype=torch.bool),
+            "type_ids": torch.tensor(type_ids, dtype=torch.long),
+        }
+
+
+class BilingualEvalCollateFn:
+    def __init__(
+        self,
+        tokenizer: BilingualBaseTokenizer,
+        src_column: str = "ru",
+        tgt_column: str = "en",
+        max_length: int | None = None,
+    ):
+        self.tokenizer = tokenizer
+        self.src_column = src_column
+        self.tgt_column = tgt_column
+
+        self.tokenizer.enable_padding(direction="right")
+
+        if max_length is not None:
+            self.tokenizer.enable_truncation(max_length, direction="right")
+        else:
+            self.tokenizer.no_truncation()
+
+    def _pad(
+        self,
+        encodings: list[Encoding],
+    ) -> tuple[list[list[int]], list[list[int]], list[list[int]]]:
+        max_length = max(len(encoding.ids) for encoding in encodings)
+        input_ids = []
+        attention_mask = []
+        type_ids = []
+
+        for encoding in encodings:
+            pad = max_length - len(encoding.ids)
+            input_ids.append(encoding.ids + [self.tokenizer.pad_token_id] * pad)
+            attention_mask.append(encoding.attention_mask + [0] * pad)
+            type_ids.append(encoding.type_ids + [0] * pad)
+
+        return input_ids, attention_mask, type_ids
+
+    def __call__(self, batch: list[dict[str, str]]):
+        src_texts = [item[self.src_column] for item in batch]
+        targets = [item[self.tgt_column] for item in batch]
+
+        self.tokenizer.set_source_language(self.src_column)
+        inference_encodings = self.tokenizer.encode_batch(src_texts)
+        inference_input_ids, inference_attention_mask, inference_type_ids = self._pad(inference_encodings)
+
+        encodings = self.tokenizer.encode_batch(list(zip(src_texts, targets)))
+        input_ids, attention_mask, type_ids = self._pad(encodings)
+
+        return {
+            "input_ids": torch.tensor(input_ids, dtype=torch.long),
+            "attention_mask": torch.tensor(attention_mask, dtype=torch.bool),
+            "type_ids": torch.tensor(type_ids, dtype=torch.long),
+            "inference_input_ids": torch.tensor(inference_input_ids, dtype=torch.long),
+            "inference_attention_mask": torch.tensor(inference_attention_mask, dtype=torch.bool),
+            "inference_type_ids": torch.tensor(inference_type_ids, dtype=torch.long),
+            "targets": targets,
+        }
+
+
 def compute_loss(
-    model: Models,
-    batch: dict[str, Tensor],
+    model: Seq2SeqModels,
+    batch: dict[str, Any],
     criterion: CrossEntropyLoss,
     device: Device,
 ) -> Tensor:
@@ -95,7 +242,7 @@ def compute_loss(
 
     logits = model.forward(
         src_ids,
-        tgt_ids,
+        tgt_ids[:, :-1],
         src_mask,
     )
 
@@ -104,9 +251,33 @@ def compute_loss(
     return loss
 
 
+def compute_bilingual_loss(
+    model: BilingualModels,
+    batch: dict[str, Any],
+    criterion: CrossEntropyLoss,
+    device: Device,
+) -> Tensor:
+    input_ids = batch["input_ids"].to(device=device)
+    attention_mask = batch["attention_mask"].to(device=device)
+    type_ids = batch["type_ids"].to(device=device)
+
+    logits = model.forward(
+        input_ids[:, :-1],
+        attention_mask[:, :-1],
+        type_ids[:, :-1],
+    )
+
+    targets = input_ids[:, 1:]
+    loss_mask = attention_mask[:, 1:] & type_ids[:, 1:].eq(1)
+    if not loss_mask.any():
+        raise ValueError("Bilingual loss mask is empty: batch contains no target tokens")
+    loss = criterion(logits[loss_mask], targets[loss_mask])
+    return loss
+
+
 def compute_predictions(
-    model: Models,
-    batch: dict[str, Tensor],
+    model: Seq2SeqModels,
+    batch: dict[str, Any],
     device: Device,
     tgt_tokenizer: BaseTokenizer,
     max_length: int = 1024,
@@ -116,7 +287,24 @@ def compute_predictions(
 
     generated_ids = model.inference(src_ids, src_mask, max_length)
     predictions = tgt_tokenizer.decode_batch(generated_ids.cpu().tolist())
-    references = tgt_tokenizer.decode_batch(batch["tgt_ids"].tolist())
+    references = batch["targets"]
+    return predictions, references
+
+
+def compute_bilingual_predictions(
+    model: BilingualModels,
+    batch: dict[str, Any],
+    device: Device,
+    tokenizer: BilingualBaseTokenizer,
+    max_length: int = 1024,
+) -> tuple[list[str], list[str]]:
+    input_ids = batch.get("inference_input_ids", batch["input_ids"]).to(device=device)
+    attention_mask = batch.get("inference_attention_mask", batch["attention_mask"]).to(device=device)
+    type_ids = batch.get("inference_type_ids", batch["type_ids"]).to(device=device)
+
+    generated_ids = model.inference(input_ids, attention_mask, type_ids, max_length)
+    predictions = tokenizer.decode_batch(generated_ids.cpu().tolist())
+    references = batch["targets"]
 
     return predictions, references
 
