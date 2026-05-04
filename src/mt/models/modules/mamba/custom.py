@@ -531,6 +531,7 @@ class MambaSeq2Seq(EncoderDecoder):
         input_ids: Tensor,
         attention_mask: Tensor,
         max_length: int = 100,
+        temperature: float = 0.0,
     ) -> Tensor:
         batch_size = input_ids.size(0)
         device = input_ids.device
@@ -553,7 +554,7 @@ class MambaSeq2Seq(EncoderDecoder):
                 encoder_outputs=encoder_outputs,
                 attention_mask=attention_mask,
             )
-            next_token = logits_t.argmax(dim=-1)
+            next_token = self._sample_next_token(logits_t, temperature)
 
             active = ~finished
             sequences[active, t] = next_token[active]

@@ -1,10 +1,28 @@
 from abc import ABC, abstractmethod
 
+import torch
 import torch.nn as nn
 from torch import Tensor
 
 
-class EncoderDecoder(ABC, nn.Module):
+class TemperatureGenerationMixin:
+    @staticmethod
+    def _sample_next_token(logits: Tensor, temperature: float = 0.0) -> Tensor:
+        if temperature < 0.0:
+            raise ValueError("temperature must be non-negative")
+
+        if temperature == 0.0:
+            return logits.argmax(dim=-1)
+
+        probabilities = torch.softmax(logits.float() / temperature, dim=-1)
+        sampled = torch.multinomial(
+            probabilities.reshape(-1, probabilities.size(-1)),
+            num_samples=1,
+        )
+        return sampled.reshape(probabilities.shape[:-1])
+
+
+class EncoderDecoder(TemperatureGenerationMixin, ABC, nn.Module):
     def __init__(
         self,
         src_vocab_size: int,
@@ -36,10 +54,11 @@ class EncoderDecoder(ABC, nn.Module):
         input_ids: Tensor,
         attention_mask: Tensor,
         max_length: int,
+        temperature: float = 0.0,
     ): ...
 
 
-class DecoderOnly(ABC, nn.Module):
+class DecoderOnly(TemperatureGenerationMixin, ABC, nn.Module):
     def __init__(
         self,
         vocab_size: int,
@@ -68,4 +87,5 @@ class DecoderOnly(ABC, nn.Module):
         attention_mask: Tensor,
         type_ids: Tensor,
         max_length: int,
+        temperature: float = 0.0,
     ): ...

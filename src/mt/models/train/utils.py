@@ -297,11 +297,17 @@ def compute_predictions(
     device: Device,
     tgt_tokenizer: BaseTokenizer,
     max_length: int = 1024,
+    temperature: float = 0.0,
 ) -> tuple[list[str], list[str]]:
     src_ids = batch["src_ids"].to(device=device)
     src_mask = batch["src_mask"].to(device=device)
 
-    generated_ids = model.inference(src_ids, src_mask, max_length)
+    generated_ids = model.inference(
+        src_ids,
+        src_mask,
+        max_length,
+        temperature=temperature,
+    )
     predictions = tgt_tokenizer.decode_batch(generated_ids.cpu().tolist())
     references = batch["targets"]
     return predictions, references
@@ -313,6 +319,7 @@ def compute_bilingual_predictions(
     device: Device,
     tokenizer: BilingualBaseTokenizer,
     max_length: int = 1024,
+    temperature: float = 0.0,
 ) -> tuple[list[str], list[str]]:
     input_ids = batch.get("inference_input_ids", batch["input_ids"]).to(device=device)
     attention_mask = batch.get("inference_attention_mask", batch["attention_mask"]).to(
@@ -320,7 +327,13 @@ def compute_bilingual_predictions(
     )
     type_ids = batch.get("inference_type_ids", batch["type_ids"]).to(device=device)
 
-    generated_ids = model.inference(input_ids, attention_mask, type_ids, max_length)
+    generated_ids = model.inference(
+        input_ids,
+        attention_mask,
+        type_ids,
+        max_length,
+        temperature=temperature,
+    )
     predictions = tokenizer.decode_batch(generated_ids.cpu().tolist())
     references = batch["targets"]
 

@@ -194,6 +194,7 @@ class LstmSeq2Seq(EncoderDecoder):
         input_ids: Tensor,
         attention_mask: Tensor,
         max_length: int = 128,
+        temperature: float = 0.0,
     ):
         batch_size = input_ids.size(0)
         device = input_ids.device
@@ -222,7 +223,7 @@ class LstmSeq2Seq(EncoderDecoder):
                 encoder_outputs,
                 ~attention_mask.bool(),
             )
-            next_token = logits.argmax(dim=2).squeeze(1)
+            next_token = self._sample_next_token(logits, temperature).squeeze(1)
 
             mask = ~finished
             sequences[mask, t] = next_token[mask]
