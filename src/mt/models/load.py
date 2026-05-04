@@ -14,6 +14,7 @@ from .modules import (
     MambaHybridSeq2Seq,
     MambaSeq2Seq,
     S4Seq2Seq,
+    TransformerDecoder,
     TransformerSeq2Seq,
 )
 
@@ -28,6 +29,7 @@ MODEL_CLASSES: dict[str, Model] = {
     "mamba-hybrid": MambaHybridSeq2Seq,
     "ssm": S4Seq2Seq,
     "transformer": TransformerSeq2Seq,
+    "transformer-decoder": TransformerDecoder,
 }
 
 

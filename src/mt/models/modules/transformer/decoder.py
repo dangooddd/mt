@@ -80,29 +80,41 @@ class TransformerDecoder(DecoderOnly):
         max_length: int = 256,
     ) -> Tensor:
         _ = type_ids
-        _ = attention_mask
-        batch_size = input_ids.size(0)
+        batch_size, input_length = input_ids.shape
         device = input_ids.device
 
-        sequences = torch.full(
+        generated = torch.full(
             (batch_size, max_length),
             self.pad_token_id,
             dtype=torch.long,
             device=device,
         )
 
-        sequences[:, 0] = self.bos_token_id
+        sequences = torch.full(
+            (batch_size, input_length + max_length),
+            self.pad_token_id,
+            dtype=torch.long,
+            device=device,
+        )
+        sequences[:, :input_length] = input_ids
+
+        lengths = attention_mask.long().sum(dim=1).clamp_min(1)
         finished = torch.zeros(batch_size, dtype=torch.bool, device=device)
 
-        for t in range(1, max_length):
-            logits_t = self.decode(sequences[:, :t])[:, -1, :]
-            next_token = logits_t.argmax(dim=-1)
+        for t in range(max_length):
+            current_length = int(lengths.max().item())
+            logits = self.decode(sequences[:, :current_length])
+            last_logits = logits[torch.arange(batch_size, device=device), lengths - 1]
+            next_token = last_logits.argmax(dim=-1)
 
             active = ~finished
-            sequences[active, t] = next_token[active]
-            finished |= next_token == self.tgt_eos_token_id
+            positions = lengths[active]
+            generated[active, t] = next_token[active]
+            sequences[active, positions] = next_token[active]
+            lengths[active] = lengths[active] + 1
 
+            finished |= active & next_token.eq(self.eos_token_id)
             if finished.all():
                 break
 
-        return sequences
+        return generated
