@@ -1,9 +1,26 @@
 import torch
 import torch.nn as nn
+from mamba_ssm import Mamba
 from torch import Tensor
 
 from ..base import EncoderDecoder
-from ..shared import MambaBlock, RMSNorm, Transformer
+from ..shared import RMSNorm, Transformer
+
+
+class MambaBlock(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        d_state: int,
+        d_conv: int,
+    ):
+        super().__init__()
+        self.mamba = Mamba(d_model, d_state=d_state, d_conv=d_conv)
+        self.norm = RMSNorm(d_model)
+
+    def forward(self, x: Tensor):
+        x = x + self.mamba(self.norm(x))
+        return x
 
 
 class HybridBlock(nn.Module):

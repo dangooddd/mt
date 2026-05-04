@@ -1,48 +1,45 @@
 import torch
 import torch.nn as nn
+from mamba_ssm import Mamba2
 from torch import Tensor
 
 from ..base import EncoderDecoder
 from ..shared import PositionalEncoding, RMSNorm, Transformer
 
 
-class SelfAttention(nn.Module):
+class Mamba2Block(nn.Module):
     def __init__(
         self,
-        d_model: int = 256,
-        num_heads: int = 8,
-        dropout: float = 0.2,
+        d_model: int,
+        d_state: int,
+        d_conv: int,
+        headdim: int,
     ):
         super().__init__()
-        self.attention = nn.MultiheadAttention(d_model, num_heads, dropout, batch_first=True)
+        self.mamba = Mamba2(d_model, d_state=d_state, d_conv=d_conv, headdim=headdim)
         self.norm = RMSNorm(d_model)
 
-    def forward(self, x: Tensor, mask: Tensor | None = None):
-        seq_length = x.size(1)
-        x = self.norm(x)
-
-        attn_mask = torch.triu(
-            torch.ones(seq_length, seq_length, device=x.device, dtype=torch.bool),
-            diagonal=1,
-        )
-
-        x, _ = self.attention(x, x, x, key_padding_mask=mask, attn_mask=attn_mask)
-        return x
+    def forward(self, x: Tensor):
+        return x + self.mamba(self.norm(x))
 
 
-class TransformerDecoder(nn.Module):
+class Mamba2HybridBlock(nn.Module):
     def __init__(
         self,
-        d_model: int = 256,
-        num_heads: int = 8,
-        dropout: float = 0.2,
+        d_model: int = 768,
+        num_heads: int = 16,
+        dropout: float = 0.1,
+        headdim: int = 64,
+        d_state: int = 64,
+        d_conv: int = 4,
     ):
         super().__init__()
 
-        self.self_attn = SelfAttention(
-            d_model,
-            num_heads=num_heads,
-            dropout=dropout,
+        self.mamba = Mamba2Block(
+            d_model=d_model,
+            d_state=d_state,
+            d_conv=d_conv,
+            headdim=headdim,
         )
 
         self.transformer = Transformer(
@@ -52,12 +49,12 @@ class TransformerDecoder(nn.Module):
         )
 
     def forward(self, x: Tensor, y: Tensor, mask: Tensor):
-        x = x + self.self_attn(x)
+        x = self.mamba(x)
         x = self.transformer(x, y, mask)
         return x
 
 
-class TransformerSeq2Seq(EncoderDecoder):
+class Mamba2HybridSeq2Seq(EncoderDecoder):
     def __init__(
         self,
         src_vocab_size: int,
@@ -66,12 +63,15 @@ class TransformerSeq2Seq(EncoderDecoder):
         tgt_pad_token_id: int,
         tgt_bos_token_id: int,
         tgt_eos_token_id: int,
-        encoder_layers: int = 2,
-        decoder_layers: int = 2,
-        d_model: int = 256,
-        num_heads: int = 8,
-        dropout: float = 0.2,
-        max_length_in: int = 2048,
+        encoder_layers: int = 4,
+        decoder_layers: int = 4,
+        d_model: int = 512,
+        num_heads: int = 16,
+        dropout: float = 0.1,
+        headdim: int = 64,
+        d_state: int = 64,
+        d_conv: int = 4,
+        max_input_length: int = 4096,
     ):
         super().__init__(
             src_vocab_size=src_vocab_size,
@@ -84,9 +84,9 @@ class TransformerSeq2Seq(EncoderDecoder):
 
         self.encoder_embedding = nn.Embedding(src_vocab_size, d_model, src_pad_token_id)
         self.decoder_embedding = nn.Embedding(tgt_vocab_size, d_model, tgt_pad_token_id)
-        self.positional_encoding = PositionalEncoding(d_model, max_length=max_length_in)
+        self.positional_encoding = PositionalEncoding(d_model, max_input_length)
         self.norm = RMSNorm(d_model)
-        self.head = nn.Linear(d_model, tgt_vocab_size)
+        self.head = nn.Linear(d_model, tgt_vocab_size, bias=False)
 
         self.encoder = nn.ModuleList(
             [
@@ -101,10 +101,13 @@ class TransformerSeq2Seq(EncoderDecoder):
 
         self.decoder = nn.ModuleList(
             [
-                TransformerDecoder(
+                Mamba2HybridBlock(
                     d_model=d_model,
                     num_heads=num_heads,
                     dropout=dropout,
+                    headdim=headdim,
+                    d_state=d_state,
+                    d_conv=d_conv,
                 )
                 for _ in range(decoder_layers)
             ]
@@ -128,7 +131,6 @@ class TransformerSeq2Seq(EncoderDecoder):
         key_padding_mask: Tensor,
     ) -> Tensor:
         x = self.decoder_embedding(output_ids)
-        x = self.positional_encoding(x)
         for layer in self.decoder:
             x = layer(x, encoder_outputs, key_padding_mask)
         x = self.head(self.norm(x))
@@ -144,7 +146,7 @@ class TransformerSeq2Seq(EncoderDecoder):
         self,
         input_ids: Tensor,
         attention_mask: Tensor,
-        max_length: int = 128,
+        max_length: int = 256,
     ) -> Tensor:
         batch_size = input_ids.size(0)
         device = input_ids.device
