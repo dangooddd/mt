@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from .base import EncoderDecoder
-from .shared import PositionalEncoding, RMSNorm, Transformer
+from ..base import EncoderDecoder
+from ..shared import PositionalEncoding, RMSNorm, Transformer
 
 
 class SelfAttention(nn.Module):
