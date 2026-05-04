@@ -3,6 +3,8 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
+from ..base import EncoderDecoder
+
 
 class LuongAttention(nn.Module):
     def __init__(self, encoder_dim: int, decoder_dim: int):
@@ -41,7 +43,7 @@ class LuongAttention(nn.Module):
         return context, attn_weights
 
 
-class LuongSeq2Seq(nn.Module):
+class LuongSeq2Seq(EncoderDecoder):
     def __init__(
         self,
         src_vocab_size: int,
@@ -55,13 +57,16 @@ class LuongSeq2Seq(nn.Module):
         tgt_bos_token_id: int = 1,
         tgt_eos_token_id: int = 2,
     ):
-        super().__init__()
+        super().__init__(
+            src_vocab_size=src_vocab_size,
+            tgt_vocab_size=tgt_vocab_size,
+            src_pad_token_id=src_pad_token_id,
+            tgt_pad_token_id=tgt_pad_token_id,
+            tgt_bos_token_id=tgt_bos_token_id,
+            tgt_eos_token_id=tgt_eos_token_id,
+        )
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
-        self.src_pad_token_id = src_pad_token_id
-        self.tgt_pad_token_id = tgt_pad_token_id
-        self.tgt_bos_token_id = tgt_bos_token_id
-        self.tgt_eos_token_id = tgt_eos_token_id
 
         self.encoder_emb = nn.Sequential(
             nn.Embedding(

@@ -5,6 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from .base import EncoderDecoder
+
 
 def _next_power_of_two(n: int) -> int:
     return 1 << (n - 1).bit_length()
@@ -172,7 +174,7 @@ class S4DStack(nn.Module):
         return self.norm(x)
 
 
-class S4Seq2Seq(nn.Module):
+class S4Seq2Seq(EncoderDecoder):
     def __init__(
         self,
         src_vocab_size: int,
@@ -188,14 +190,18 @@ class S4Seq2Seq(nn.Module):
         tgt_eos_token_id: int = 2,
         dt_min: float = 1e-3,
         dt_max: float = 1e-1,
-    ) -> None:
-        super().__init__()
+    ):
+        super().__init__(
+            src_vocab_size=src_vocab_size,
+            tgt_vocab_size=tgt_vocab_size,
+            src_pad_token_id=src_pad_token_id,
+            tgt_pad_token_id=tgt_pad_token_id,
+            tgt_bos_token_id=tgt_bos_token_id,
+            tgt_eos_token_id=tgt_eos_token_id,
+        )
+
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
-        self.src_pad_token_id = src_pad_token_id
-        self.tgt_pad_token_id = tgt_pad_token_id
-        self.tgt_bos_token_id = tgt_bos_token_id
-        self.tgt_eos_token_id = tgt_eos_token_id
 
         self.encoder_emb = nn.Embedding(
             src_vocab_size,

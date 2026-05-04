@@ -10,8 +10,10 @@ from ignite.handlers import Checkpoint, DiskSaver, global_step_from_engine
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader, Dataset
 
-from mt.models import load_from_config
-from mt.models.train import (
+from mt.tokenizers import BaseTokenizer
+
+from ..load import load_from_config
+from .utils import (
     BilingualCollateFn,
     BilingualEvalCollateFn,
     CollateFn,
@@ -24,7 +26,6 @@ from mt.models.train import (
     create_evaluator,
     create_trainer,
 )
-from mt.tokenizers import BaseTokenizer
 
 
 def main() -> None:
@@ -72,7 +73,9 @@ def main() -> None:
         )
         evaluation_collate_fn = EvalCollateFn(
             src_tokenizer=src_tokenizer,
+            tgt_tokenizer=tgt_tokenizer,
             max_src_length=args.max_length,
+            max_tgt_length=args.max_length,
             src_column=args.src,
             tgt_column=args.tgt,
         )

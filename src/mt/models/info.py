@@ -3,7 +3,7 @@ from pathlib import Path
 
 from torch import nn
 
-from . import load_from_config
+from .load import load_from_config
 
 
 def count_parameters(model: nn.Module) -> tuple[int, int]:

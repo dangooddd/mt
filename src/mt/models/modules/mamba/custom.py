@@ -5,6 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from ..base import EncoderDecoder
+
 
 def reverse_padded_sequence(x: Tensor, lengths: Tensor) -> Tensor:
     batch_size, seq_len, dim = x.shape
@@ -366,7 +368,7 @@ class MambaDecoder(nn.Module):
         return x
 
 
-class MambaSeq2Seq(nn.Module):
+class MambaSeq2Seq(EncoderDecoder):
     def __init__(
         self,
         src_vocab_size: int,
@@ -385,13 +387,16 @@ class MambaSeq2Seq(nn.Module):
         tgt_bos_token_id: int = 1,
         tgt_eos_token_id: int = 2,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            src_vocab_size=src_vocab_size,
+            tgt_vocab_size=tgt_vocab_size,
+            src_pad_token_id=src_pad_token_id,
+            tgt_pad_token_id=tgt_pad_token_id,
+            tgt_bos_token_id=tgt_bos_token_id,
+            tgt_eos_token_id=tgt_eos_token_id,
+        )
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
-        self.src_pad_token_id = src_pad_token_id
-        self.tgt_pad_token_id = tgt_pad_token_id
-        self.tgt_bos_token_id = tgt_bos_token_id
-        self.tgt_eos_token_id = tgt_eos_token_id
 
         self.encoder_emb = nn.Sequential(
             nn.Embedding(

@@ -14,8 +14,9 @@ from tqdm import tqdm
 
 from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer
 
-from . import Models, load_from_config
-from .train import (
+from .load import Model, load_from_config
+from .modules import DecoderOnly, EncoderDecoder
+from .train.utils import (
     BilingualEvalCollateFn,
     EvalCollateFn,
     compute_bilingual_predictions,
@@ -42,7 +43,7 @@ def load_split(dataset_path: str, split: str) -> Dataset:
 @torch.inference_mode()
 def generate_predictions(
     dataset: Dataset,
-    model: Models,
+    model: EncoderDecoder,
     src_tokenizer: BaseTokenizer,
     tgt_tokenizer: BaseTokenizer,
     batch_size: int,
@@ -53,6 +54,7 @@ def generate_predictions(
 ) -> list[str]:
     collate_fn = EvalCollateFn(
         src_tokenizer=src_tokenizer,
+        tgt_tokenizer=tgt_tokenizer,
         src_column=src_column,
         tgt_column=tgt_column,
         max_src_length=max_length,
@@ -90,7 +92,7 @@ def generate_predictions(
 @torch.inference_mode()
 def generate_bilingual_predictions(
     dataset: Dataset,
-    model: Models,
+    model: DecoderOnly,
     tokenizer: BilingualBaseTokenizer,
     batch_size: int,
     max_length: int,
@@ -192,8 +194,9 @@ def main() -> None:
     max_length = int(config.get("max_length", 256))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    if isinstance(tokenizers, tuple[BaseTokenizer, BaseTokenizer]):
-        src_tokenizer, tgt_tokenizer = tokenizers
+    if isinstance(tokenizers, tuple):
+        src_tokenizer, tgt_tokenizer = cast(tuple[BaseTokenizer, BaseTokenizer], tokenizers)
+        model = cast(EncoderDecoder, model)
         predictions = generate_predictions(
             dataset=dataset,
             model=model,
@@ -206,6 +209,7 @@ def main() -> None:
             tgt_column=args.tgt,
         )
     else:
+        model = cast(DecoderOnly, model)
         predictions = generate_bilingual_predictions(
             dataset=dataset,
             model=model,

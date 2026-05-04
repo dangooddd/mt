@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from mt.tokenizers import BaseTokenizer
 
-from . import load_from_config
+from .load import load_from_config
 from .train import BilingualCollateFn, CollateFn
 
 

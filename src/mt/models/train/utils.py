@@ -18,8 +18,9 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch.types import Device
 
-from ..tokenizers import BaseTokenizer, BilingualBaseTokenizer
-from . import BilingualModels, Models, Seq2SeqModels
+from ...tokenizers import BaseTokenizer, BilingualBaseTokenizer
+from ..load import Model
+from ..modules import DecoderOnly, EncoderDecoder
 
 
 class OutputMetric(Metric):
@@ -88,32 +89,45 @@ class EvalCollateFn:
     def __init__(
         self,
         src_tokenizer: BaseTokenizer,
+        tgt_tokenizer: BaseTokenizer,
         src_column: str = "ru",
         tgt_column: str = "en",
         max_src_length: int | None = None,
+        max_tgt_length: int | None = None,
     ):
         self.src_tokenizer = src_tokenizer
+        self.tgt_tokenizer = tgt_tokenizer
         self.src_column = src_column
         self.tgt_column = tgt_column
 
         self.src_tokenizer.enable_padding(direction="right")
+        self.tgt_tokenizer.enable_padding(direction="right")
 
         if max_src_length is not None:
             self.src_tokenizer.enable_truncation(max_src_length, direction="right")
         else:
             self.src_tokenizer.no_truncation()
 
+        if max_tgt_length is not None:
+            self.tgt_tokenizer.enable_truncation(max_tgt_length, direction="right")
+        else:
+            self.tgt_tokenizer.no_truncation()
+
     def __call__(self, batch: list[dict[str, str]]):
         src_texts = [item[self.src_column] for item in batch]
         targets = [item[self.tgt_column] for item in batch]
 
         src_encodings = self.src_tokenizer.encode_batch(src_texts)
+        tgt_encodings = self.tgt_tokenizer.encode_batch(targets)
+
         src_ids = [encoding.ids for encoding in src_encodings]
+        tgt_ids = [encoding.ids for encoding in tgt_encodings]
         src_mask = [encoding.attention_mask for encoding in src_encodings]
 
         return {
             "src_mask": torch.tensor(src_mask, dtype=torch.bool),
             "src_ids": torch.tensor(src_ids, dtype=torch.long),
+            "tgt_ids": torch.tensor(tgt_ids, dtype=torch.long),
             "targets": targets,
         }
 
@@ -214,7 +228,9 @@ class BilingualEvalCollateFn:
 
         self.tokenizer.set_source_language(self.src_column)
         inference_encodings = self.tokenizer.encode_batch(src_texts)
-        inference_input_ids, inference_attention_mask, inference_type_ids = self._pad(inference_encodings)
+        inference_input_ids, inference_attention_mask, inference_type_ids = self._pad(
+            inference_encodings
+        )
 
         encodings = self.tokenizer.encode_batch(list(zip(src_texts, targets)))
         input_ids, attention_mask, type_ids = self._pad(encodings)
@@ -231,7 +247,7 @@ class BilingualEvalCollateFn:
 
 
 def compute_loss(
-    model: Seq2SeqModels,
+    model: EncoderDecoder,
     batch: dict[str, Any],
     criterion: CrossEntropyLoss,
     device: Device,
@@ -252,7 +268,7 @@ def compute_loss(
 
 
 def compute_bilingual_loss(
-    model: BilingualModels,
+    model: DecoderOnly,
     batch: dict[str, Any],
     criterion: CrossEntropyLoss,
     device: Device,
@@ -276,7 +292,7 @@ def compute_bilingual_loss(
 
 
 def compute_predictions(
-    model: Seq2SeqModels,
+    model: EncoderDecoder,
     batch: dict[str, Any],
     device: Device,
     tgt_tokenizer: BaseTokenizer,
@@ -292,14 +308,16 @@ def compute_predictions(
 
 
 def compute_bilingual_predictions(
-    model: BilingualModels,
+    model: DecoderOnly,
     batch: dict[str, Any],
     device: Device,
     tokenizer: BilingualBaseTokenizer,
     max_length: int = 1024,
 ) -> tuple[list[str], list[str]]:
     input_ids = batch.get("inference_input_ids", batch["input_ids"]).to(device=device)
-    attention_mask = batch.get("inference_attention_mask", batch["attention_mask"]).to(device=device)
+    attention_mask = batch.get("inference_attention_mask", batch["attention_mask"]).to(
+        device=device
+    )
     type_ids = batch.get("inference_type_ids", batch["type_ids"]).to(device=device)
 
     generated_ids = model.inference(input_ids, attention_mask, type_ids, max_length)
@@ -310,7 +328,7 @@ def compute_bilingual_predictions(
 
 
 def create_trainer(
-    model: Models,
+    model: Model,
     optimizer: Optimizer,
     criterion: CrossEntropyLoss,
     scheduler: LRScheduler,
@@ -349,7 +367,7 @@ def create_trainer(
 
 
 def create_evaluator(
-    model: Models,
+    model: Model,
     criterion: CrossEntropyLoss,
     compute_loss: Callable[..., Tensor],
     compute_predictions: Callable[..., tuple[list[str], list[str]]],

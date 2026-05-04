@@ -5,6 +5,7 @@ import torch.nn as nn
 from mamba_ssm import Mamba
 from torch import Tensor
 
+from ..base import DecoderOnly
 from ..shared import FFN, Attention, RMSNorm
 
 
@@ -59,7 +60,7 @@ class AttentionLayer(nn.Module):
         return x
 
 
-class MambaDecoder(nn.Module):
+class MambaDecoder(DecoderOnly):
     def __init__(
         self,
         vocab_size: int,
@@ -75,12 +76,12 @@ class MambaDecoder(nn.Module):
         d_conv: int = 4,
         expand: int = 2,
     ):
-        super().__init__()
-
-        self.vocab_size = vocab_size
-        self.pad_token_id = pad_token_id
-        self.bos_token_id = bos_token_id
-        self.eos_token_id = eos_token_id
+        super().__init__(
+            vocab_size=vocab_size,
+            pad_token_id=pad_token_id,
+            bos_token_id=bos_token_id,
+            eos_token_id=eos_token_id,
+        )
 
         self.embedding = nn.Sequential(
             nn.Embedding(

@@ -1,6 +1,7 @@
 IMAGE_NAME := danefedov-dev
 CONTAINER_NAME := danefedov-dev-$(shell date +%Y-%m-%d-%H-%M)
 TENSORBOARD_PORT ?= 6006
+LOGDIR ?= data/runs
 
 .PHONY: docker-run docker-build tensorboard
 
