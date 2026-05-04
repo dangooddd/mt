@@ -1,0 +1,11 @@
+{
+  "model": "transformer-decoder",
+  "args": {
+    "num_layers": 12,
+    "d_model": 768,
+    "num_heads": 16,
+    "dropout": 0.1,
+    "max_length": 2048
+  },
+  "tokenizer": "bilingual-unigram"
+}

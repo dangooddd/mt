@@ -1,0 +1,12 @@
+{
+  "model": "mamba-decoder",
+  "args": {
+    "hidden_size": 512,
+    "num_layers": 8,
+    "attention_layers": 4,
+    "d_state": 32,
+    "d_conv": 4,
+    "expand": 2
+  },
+  "tokenizer": "bilingual-unigram"
+}
