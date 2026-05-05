@@ -110,6 +110,7 @@ class EvalCollateFn:
             "src_mask": torch.tensor(src_mask, dtype=torch.bool),
             "src_ids": torch.tensor(src_ids, dtype=torch.long),
             "tgt_ids": torch.tensor(tgt_ids, dtype=torch.long),
+            "sources": src_texts,
             "targets": targets,
         }
 
@@ -224,6 +225,7 @@ class BilingualEvalCollateFn:
             "inference_input_ids": torch.tensor(inference_input_ids, dtype=torch.long),
             "inference_attention_mask": torch.tensor(inference_attention_mask, dtype=torch.bool),
             "inference_type_ids": torch.tensor(inference_type_ids, dtype=torch.long),
+            "sources": src_texts,
             "targets": targets,
         }
 
@@ -361,7 +363,7 @@ def create_trainer(
     def _metrics(engine: Engine):
         engine.state.metrics.update(engine.state.output)
 
-    ProgressBar().attach(trainer, metric_names="all")
+    ProgressBar().attach(trainer, metric_names=["loss", "lr", "grad_norm"])
     return trainer
 
 

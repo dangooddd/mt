@@ -14,9 +14,9 @@ from tqdm import tqdm
 
 from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer
 
-from .load import Model, load_from_config
+from .load import load_from_config
 from .modules import DecoderOnly, EncoderDecoder
-from .train.utils import (
+from .train.utils.pretrain import (
     BilingualEvalCollateFn,
     EvalCollateFn,
     compute_bilingual_predictions,

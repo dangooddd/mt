@@ -32,24 +32,17 @@ def compute_advantages(
     return advantages.reshape(-1), rewards_tensor
 
 
-def grpo_loss(
+def reinforce_loss(
     per_token_logps: Tensor,
-    old_per_token_logps: Tensor,
     ref_per_token_logps: Tensor,
     mask: Tensor,
     advantages: Tensor,
-    clip_eps: float,
     kl_beta: float,
 ) -> tuple[Tensor, dict[str, Any]]:
     advantages = advantages.detach().view(-1, 1).to(dtype=per_token_logps.dtype)
     mask = mask.to(dtype=per_token_logps.dtype)
 
-    per_token_ratio = torch.exp(per_token_logps - old_per_token_logps)
-    per_token_clipped_ratio = per_token_ratio.clamp(1.0 - clip_eps, 1.0 + clip_eps)
-    per_token_policy_loss = -torch.min(
-        per_token_ratio * advantages,
-        per_token_clipped_ratio * advantages,
-    )
+    per_token_policy_loss = -per_token_logps * advantages
     per_token_kl = (
         torch.exp(ref_per_token_logps - per_token_logps)
         - (ref_per_token_logps - per_token_logps)
@@ -61,17 +54,9 @@ def grpo_loss(
     kl = ((per_token_kl * mask).sum(dim=1) / sequence_token_count).mean()
     loss = policy_loss + kl_beta * kl
 
-    token_count = mask.sum().clamp_min(1.0)
-    clip_fraction = (
-        ((per_token_ratio - per_token_clipped_ratio).abs() > 0) * mask
-    ).sum() / token_count
-    ratio = (per_token_ratio * mask).sum() / token_count
-
     return loss, {
         "policy_loss": float(policy_loss.detach().cpu()),
         "kl": float(kl.detach().cpu()),
-        "clip_fraction": float(clip_fraction.detach().cpu()),
-        "ratio": float(ratio.detach().cpu()),
     }
 
 
@@ -142,11 +127,10 @@ def decoder_only_per_token_logps(
     return per_token_logps, loss_mask
 
 
-def compute_encoder_decoder_grpo_loss(
+def compute_encoder_decoder_reinforce_loss(
     model: EncoderDecoder,
     batch: dict[str, Any],
     device: torch.device,
-    old_policy: EncoderDecoder,
     reference_policy: EncoderDecoder,
     tgt_tokenizer: BaseTokenizer,
     reward_scorer: RewardScorer,
@@ -154,7 +138,6 @@ def compute_encoder_decoder_grpo_loss(
     max_length: int,
     temperature: float,
     advantage_eps: float,
-    clip_eps: float,
     kl_beta: float,
 ) -> tuple[Tensor, dict[str, Any]]:
     src_ids = batch["src_ids"].to(device=device)
@@ -168,24 +151,17 @@ def compute_encoder_decoder_grpo_loss(
     sources = [source for source in sources for _ in range(num_generations)]
     references = [reference for reference in references for _ in range(num_generations)]
 
-    old_policy.eval()
+    model.eval()
     reference_policy.eval()
 
     with torch.no_grad():
-        generated_ids = old_policy.inference(
+        generated_ids = model.inference(
             src_ids,
             src_mask,
             max_length,
             temperature=temperature,
         )
-        old_per_token_logps, mask = encoder_decoder_per_token_logps(
-            old_policy,
-            src_ids,
-            src_mask,
-            generated_ids,
-            temperature,
-        )
-        ref_per_token_logps, _ = encoder_decoder_per_token_logps(
+        ref_per_token_logps, mask = encoder_decoder_per_token_logps(
             reference_policy,
             src_ids,
             src_mask,
@@ -203,7 +179,6 @@ def compute_encoder_decoder_grpo_loss(
         eps=advantage_eps,
     )
 
-    model.eval()
     per_token_logps, _ = encoder_decoder_per_token_logps(
         model,
         src_ids,
@@ -212,13 +187,11 @@ def compute_encoder_decoder_grpo_loss(
         temperature,
     )
 
-    loss, metrics = grpo_loss(
+    loss, metrics = reinforce_loss(
         per_token_logps=per_token_logps,
-        old_per_token_logps=old_per_token_logps,
         ref_per_token_logps=ref_per_token_logps,
         mask=mask,
         advantages=advantages,
-        clip_eps=clip_eps,
         kl_beta=kl_beta,
     )
 
@@ -233,11 +206,10 @@ def compute_encoder_decoder_grpo_loss(
     return loss, metrics
 
 
-def compute_decoder_only_grpo_loss(
+def compute_decoder_only_reinforce_loss(
     model: DecoderOnly,
     batch: dict[str, Any],
     device: torch.device,
-    old_policy: DecoderOnly,
     reference_policy: DecoderOnly,
     tokenizer: BilingualBaseTokenizer,
     reward_scorer: RewardScorer,
@@ -245,7 +217,6 @@ def compute_decoder_only_grpo_loss(
     max_length: int,
     temperature: float,
     advantage_eps: float,
-    clip_eps: float,
     kl_beta: float,
 ) -> tuple[Tensor, dict[str, Any]]:
     input_ids = batch["inference_input_ids"].to(device=device)
@@ -261,26 +232,18 @@ def compute_decoder_only_grpo_loss(
     sources = [source for source in sources for _ in range(num_generations)]
     references = [reference for reference in references for _ in range(num_generations)]
 
-    old_policy.eval()
+    model.eval()
     reference_policy.eval()
 
     with torch.no_grad():
-        generated_ids = old_policy.inference(
+        generated_ids = model.inference(
             input_ids,
             attention_mask,
             type_ids,
             max_length,
             temperature=temperature,
         )
-        old_per_token_logps, mask = decoder_only_per_token_logps(
-            old_policy,
-            input_ids,
-            attention_mask,
-            type_ids,
-            generated_ids,
-            temperature,
-        )
-        ref_per_token_logps, _ = decoder_only_per_token_logps(
+        ref_per_token_logps, mask = decoder_only_per_token_logps(
             reference_policy,
             input_ids,
             attention_mask,
@@ -299,7 +262,6 @@ def compute_decoder_only_grpo_loss(
         eps=advantage_eps,
     )
 
-    model.eval()
     per_token_logps, _ = decoder_only_per_token_logps(
         model,
         input_ids,
@@ -309,13 +271,11 @@ def compute_decoder_only_grpo_loss(
         temperature,
     )
 
-    loss, metrics = grpo_loss(
+    loss, metrics = reinforce_loss(
         per_token_logps=per_token_logps,
-        old_per_token_logps=old_per_token_logps,
         ref_per_token_logps=ref_per_token_logps,
         mask=mask,
         advantages=advantages,
-        clip_eps=clip_eps,
         kl_beta=kl_beta,
     )
 

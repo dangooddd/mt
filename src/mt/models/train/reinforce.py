@@ -15,7 +15,6 @@ from mt.models.modules import DecoderOnly, EncoderDecoder
 from mt.tokenizers import BaseTokenizer
 
 from ..load import load_from_config
-from .utils.grpo import compute_decoder_only_grpo_loss, compute_encoder_decoder_grpo_loss
 from .utils.pretrain import (
     BilingualEvalCollateFn,
     EvalCollateFn,
@@ -27,11 +26,15 @@ from .utils.pretrain import (
     create_evaluator,
     create_trainer,
 )
+from .utils.reinforce import (
+    compute_decoder_only_reinforce_loss,
+    compute_encoder_decoder_reinforce_loss,
+)
 from .utils.rewards import create_reward_scorer
 
 
 def main() -> None:
-    parser = ArgumentParser("Train MT model with GRPO")
+    parser = ArgumentParser("Train MT model with group REINFORCE")
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--dataset-path", type=str, required=True)
     parser.add_argument("--experiment", type=str, default=None)
@@ -56,11 +59,12 @@ def main() -> None:
     parser.add_argument("--comet-model-name", type=str, default="Unbabel/wmt22-comet-da")
     parser.add_argument("--comet-batch-size", type=int, default=100)
     parser.add_argument("--advantage-eps", type=float, default=1e-6)
-    parser.add_argument("--clip-eps", type=float, default=0.2)
     parser.add_argument("--kl-beta", type=float, default=0.001)
-    parser.add_argument("--old-policy-update-steps", type=int, default=10)
     parser.add_argument("--no-load-weights", action="store_true")
     args = parser.parse_args()
+
+    if args.kl_beta < 0.0:
+        raise ValueError("kl-beta must be non-negative")
 
     dataset = load_from_disk(args.dataset_path)
     model, tokenizers, _ = load_from_config(args.model_dir, load_weights=not args.no_load_weights)
@@ -69,10 +73,6 @@ def main() -> None:
         comet_model_name=args.comet_model_name,
         comet_batch_size=args.comet_batch_size,
     )
-
-    old_policy = deepcopy(model)
-    old_policy.requires_grad_(False)
-    old_policy.eval()
 
     reference_policy = deepcopy(model)
     reference_policy.requires_grad_(False)
@@ -109,9 +109,8 @@ def main() -> None:
             src_column=args.src,
             tgt_column=args.tgt,
         )
-        train_loss_fn = compute_encoder_decoder_grpo_loss
+        train_loss_fn = compute_encoder_decoder_reinforce_loss
         train_loss_kwargs = {
-            "old_policy": cast(EncoderDecoder, old_policy),
             "reference_policy": cast(EncoderDecoder, reference_policy),
             "tgt_tokenizer": tgt_tokenizer,
             "reward_scorer": reward_scorer,
@@ -119,7 +118,6 @@ def main() -> None:
             "max_length": args.max_length,
             "temperature": args.temperature,
             "advantage_eps": args.advantage_eps,
-            "clip_eps": args.clip_eps,
             "kl_beta": args.kl_beta,
         }
         evaluation_loss_fn = compute_pretrain_loss
@@ -145,9 +143,8 @@ def main() -> None:
             src_column=args.src,
             tgt_column=args.tgt,
         )
-        train_loss_fn = compute_decoder_only_grpo_loss
+        train_loss_fn = compute_decoder_only_reinforce_loss
         train_loss_kwargs = {
-            "old_policy": cast(DecoderOnly, old_policy),
             "reference_policy": cast(DecoderOnly, reference_policy),
             "tokenizer": tokenizer,
             "reward_scorer": reward_scorer,
@@ -155,7 +152,6 @@ def main() -> None:
             "max_length": args.max_length,
             "temperature": args.temperature,
             "advantage_eps": args.advantage_eps,
-            "clip_eps": args.clip_eps,
             "kl_beta": args.kl_beta,
         }
         evaluation_loss_fn = compute_bilingual_loss
@@ -199,23 +195,9 @@ def main() -> None:
     )
 
     device = next(model.parameters()).device
-    old_policy.to(device)
     reference_policy.to(device)
 
-    def sync_old_policy() -> None:
-        old_policy.load_state_dict(model.state_dict())
-        old_policy.requires_grad_(False)
-        old_policy.eval()
-
-    @trainer.on(Events.STARTED)
-    def _sync_old_policy_on_start(_):
-        sync_old_policy()
-
-    @trainer.on(Events.ITERATION_COMPLETED(every=args.old_policy_update_steps))
-    def _sync_old_policy_on_interval(_):
-        sync_old_policy()
-
-    experiment = args.experiment or f"{args.model_dir.name}-grpo"
+    experiment = args.experiment or f"{args.model_dir.name}-reinforce"
     checkpoints_dir = args.checkpoints_dir / experiment
     runs_dir = args.runs_dir / experiment
 
@@ -228,7 +210,7 @@ def main() -> None:
         },
         DiskSaver(checkpoints_dir, create_dir=True, require_empty=False),
         n_saved=args.save_total_limit,
-        filename_prefix="grpo",
+        filename_prefix="reinforce",
     )
 
     best_checkpoint_handler = Checkpoint(
