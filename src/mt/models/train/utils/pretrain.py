@@ -18,9 +18,9 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch.types import Device
 
-from ...tokenizers import BaseTokenizer, BilingualBaseTokenizer
-from ..load import Model
-from ..modules import DecoderOnly, EncoderDecoder
+from mt.models.load import Model
+from mt.models.modules import DecoderOnly, EncoderDecoder
+from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer
 
 
 class OutputMetric(Metric):

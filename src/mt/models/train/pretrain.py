@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, Dataset
 from mt.tokenizers import BaseTokenizer
 
 from ..load import load_from_config
-from .utils import (
+from .utils.pretrain import (
     BilingualCollateFn,
     BilingualEvalCollateFn,
     CollateFn,
