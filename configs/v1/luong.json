@@ -1,8 +1,0 @@
-{
-  "model": "luong",
-  "args": {
-    "embedding_dim": 1024,
-    "hidden_dim": 1024,
-    "num_layers": 5
-  }
-}

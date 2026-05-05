@@ -1,0 +1,16 @@
+{
+  "model": "mamba2-hybrid",
+  "args": {
+    "encoder_layers": 6,
+    "decoder_layers": 6,
+    "d_model": 512,
+    "num_heads": 16,
+    "dropout": 0.1,
+    "headdim": 64,
+    "d_state": 64,
+    "d_conv": 4,
+    "max_input_length": 4096
+  },
+  "src_tokenizer": "unigram",
+  "tgt_tokenizer": "unigram"
+}

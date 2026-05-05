@@ -1,9 +1,0 @@
-{
-    "model": "lstm",
-    "args": {
-        "embedding_size": 256,
-        "hidden_size": 256,
-        "num_layers": 4,
-        "num_heads": 8
-    }
-}
