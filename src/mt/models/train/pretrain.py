@@ -80,6 +80,7 @@ def main() -> None:
             tgt_column=args.tgt,
         )
         loss_fn = compute_loss
+        loss_kwargs = {"criterion": criterion}
         predictions_fn = compute_predictions
         predictions_kwargs = {
             "tgt_tokenizer": tgt_tokenizer,
@@ -105,6 +106,7 @@ def main() -> None:
             tgt_column=args.tgt,
         )
         loss_fn = compute_bilingual_loss
+        loss_kwargs = {"criterion": criterion}
         predictions_fn = compute_bilingual_predictions
         predictions_kwargs = {
             "tokenizer": tokenizer,
@@ -148,16 +150,16 @@ def main() -> None:
     trainer = create_trainer(
         model=model,
         optimizer=optimizer,
-        criterion=criterion,
         scheduler=scheduler,
         compute_loss=loss_fn,
+        compute_loss_kwargs=loss_kwargs,
         max_grad_norm=args.max_grad_norm,
     )
 
     evaluator = create_evaluator(
         model=model,
-        criterion=criterion,
         compute_loss=loss_fn,
+        compute_loss_kwargs=loss_kwargs,
         compute_predictions=predictions_fn,
         compute_predictions_kwargs=predictions_kwargs,
     )

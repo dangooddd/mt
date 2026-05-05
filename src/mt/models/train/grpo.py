@@ -8,23 +8,25 @@ from datasets import load_from_disk
 from ignite.engine import Events
 from ignite.handlers import Checkpoint, DiskSaver, global_step_from_engine
 from sacrebleu.metrics import CHRF
+from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader, Dataset
 
 from mt.tokenizers import BaseTokenizer
 
 from ..load import load_from_config
-from .utils.grpo import (
-    compute_decoder_only_grpo_loss,
-    compute_encoder_decoder_grpo_loss,
-    create_chrf_evaluator,
-    create_grpo_trainer,
-)
+from .utils.grpo import compute_decoder_only_grpo_loss, compute_encoder_decoder_grpo_loss
 from .utils.pretrain import (
     BilingualEvalCollateFn,
     EvalCollateFn,
     attach_tensorboard_logging,
+    compute_bilingual_loss,
     compute_bilingual_predictions,
     compute_predictions,
+    create_evaluator,
+    create_trainer,
+)
+from .utils.pretrain import (
+    compute_loss as compute_pretrain_loss,
 )
 
 
@@ -56,15 +58,23 @@ def main() -> None:
 
     dataset = load_from_disk(args.dataset_path)
     model, tokenizers, _ = load_from_config(args.model_dir, load_weights=args.load_weights)
+    chrf = CHRF()
+
     optimizer = optim.AdamW(
         model.parameters(),
         lr=args.learning_rate,
         weight_decay=args.weight_decay,
     )
-    chrf = CHRF()
+
+    scheduler = optim.lr_scheduler.ConstantLR(
+        optimizer,
+        factor=1.0,
+        total_iters=args.steps,
+    )
 
     if isinstance(tokenizers, tuple):
         src_tokenizer, tgt_tokenizer = cast(tuple[BaseTokenizer, BaseTokenizer], tokenizers)
+        criterion = CrossEntropyLoss(ignore_index=tgt_tokenizer.pad_token_id)
         train_collate_fn = EvalCollateFn(
             src_tokenizer=src_tokenizer,
             tgt_tokenizer=tgt_tokenizer,
@@ -81,8 +91,8 @@ def main() -> None:
             src_column=args.src,
             tgt_column=args.tgt,
         )
-        loss_fn = compute_encoder_decoder_grpo_loss
-        loss_kwargs = {
+        train_loss_fn = compute_encoder_decoder_grpo_loss
+        train_loss_kwargs = {
             "tgt_tokenizer": tgt_tokenizer,
             "metric": chrf,
             "num_generations": args.num_generations,
@@ -90,13 +100,17 @@ def main() -> None:
             "temperature": args.temperature,
             "advantage_eps": args.advantage_eps,
         }
+        evaluation_loss_fn = compute_pretrain_loss
+        evaluation_loss_kwargs = {"criterion": criterion}
         predictions_fn = compute_predictions
         predictions_kwargs = {
             "tgt_tokenizer": tgt_tokenizer,
             "max_length": args.max_length,
         }
+
     else:
         tokenizer = tokenizers
+        criterion = CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
         train_collate_fn = BilingualEvalCollateFn(
             tokenizer=tokenizer,
             max_length=args.max_length,
@@ -109,8 +123,8 @@ def main() -> None:
             src_column=args.src,
             tgt_column=args.tgt,
         )
-        loss_fn = compute_decoder_only_grpo_loss
-        loss_kwargs = {
+        train_loss_fn = compute_decoder_only_grpo_loss
+        train_loss_kwargs = {
             "tokenizer": tokenizer,
             "metric": chrf,
             "num_generations": args.num_generations,
@@ -118,6 +132,8 @@ def main() -> None:
             "temperature": args.temperature,
             "advantage_eps": args.advantage_eps,
         }
+        evaluation_loss_fn = compute_bilingual_loss
+        evaluation_loss_kwargs = {"criterion": criterion}
         predictions_fn = compute_bilingual_predictions
         predictions_kwargs = {
             "tokenizer": tokenizer,
@@ -139,16 +155,19 @@ def main() -> None:
         num_workers=0,
     )
 
-    trainer = create_grpo_trainer(
+    trainer = create_trainer(
         model=model,
         optimizer=optimizer,
-        compute_loss=loss_fn,
-        compute_loss_kwargs=loss_kwargs,
+        scheduler=scheduler,
+        compute_loss=train_loss_fn,
+        compute_loss_kwargs=train_loss_kwargs,
         max_grad_norm=args.max_grad_norm,
     )
 
-    evaluator = create_chrf_evaluator(
+    evaluator = create_evaluator(
         model=model,
+        compute_loss=evaluation_loss_fn,
+        compute_loss_kwargs=evaluation_loss_kwargs,
         compute_predictions=predictions_fn,
         compute_predictions_kwargs=predictions_kwargs,
     )
@@ -161,6 +180,7 @@ def main() -> None:
         {
             "model": model,
             "optimizer": optimizer,
+            "scheduler": scheduler,
             "trainer": trainer,
         },
         DiskSaver(checkpoints_dir, create_dir=True, require_empty=False),

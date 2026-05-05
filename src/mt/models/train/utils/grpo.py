@@ -1,19 +1,11 @@
-from collections.abc import Callable
-from typing import Any, cast, no_type_check
+from typing import Any, cast
 
 import torch
-from ignite.engine import Engine, Events
-from ignite.handlers import ProgressBar
 from sacrebleu.metrics import CHRF
 from torch import Tensor
-from torch.amp import autocast
-from torch.nn.utils import clip_grad_norm_
-from torch.optim import Optimizer
 
 from mt.models.modules import DecoderOnly, EncoderDecoder
-from mt.tokenizers import BaseTokenizer
-
-from .pretrain import OutputMetric
+from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer
 
 
 def completion_mask(token_ids: Tensor, eos_token_id: int) -> Tensor:
@@ -127,7 +119,7 @@ def compute_encoder_decoder_grpo_loss(
     max_length: int,
     temperature: float,
     advantage_eps: float,
-) -> tuple[Tensor, dict[str, float]]:
+) -> tuple[Tensor, dict[str, Any]]:
     src_ids = batch["src_ids"].to(device=device)
     src_mask = batch["src_mask"].to(device=device)
     references = cast(list[str], batch["targets"])
@@ -138,8 +130,10 @@ def compute_encoder_decoder_grpo_loss(
     references = [reference for reference in references for _ in range(num_generations)]
 
     model.eval()
-    generated_ids = model.inference(src_ids, src_mask, max_length, temperature=temperature)
-    predictions = tgt_tokenizer.decode_batch(generated_ids.detach().cpu().tolist())
+    with torch.no_grad():
+        generated_ids = model.inference(src_ids, src_mask, max_length, temperature=temperature)
+
+    predictions = tgt_tokenizer.decode_batch(generated_ids.cpu().tolist())
     rewards = compute_chrf_rewards(predictions, references, metric)
     advantages, rewards_tensor = compute_advantages(
         rewards,
@@ -164,13 +158,13 @@ def compute_decoder_only_grpo_loss(
     model: DecoderOnly,
     batch: dict[str, Any],
     device: torch.device,
-    tokenizer,
+    tokenizer: BilingualBaseTokenizer,
     metric: CHRF,
     num_generations: int,
     max_length: int,
     temperature: float,
     advantage_eps: float,
-) -> tuple[Tensor, dict[str, float]]:
+) -> tuple[Tensor, dict[str, Any]]:
     input_ids = batch["inference_input_ids"].to(device=device)
     attention_mask = batch["inference_attention_mask"].to(device=device)
     type_ids = batch["inference_type_ids"].to(device=device)
@@ -183,14 +177,16 @@ def compute_decoder_only_grpo_loss(
     references = [reference for reference in references for _ in range(num_generations)]
 
     model.eval()
-    generated_ids = model.inference(
-        input_ids,
-        attention_mask,
-        type_ids,
-        max_length,
-        temperature=temperature,
-    )
-    predictions = tokenizer.decode_batch(generated_ids.detach().cpu().tolist())
+    with torch.no_grad():
+        generated_ids = model.inference(
+            input_ids,
+            attention_mask,
+            type_ids,
+            max_length,
+            temperature=temperature,
+        )
+
+    predictions = tokenizer.decode_batch(generated_ids.cpu().tolist())
     rewards = compute_chrf_rewards(predictions, references, metric)
     advantages, rewards_tensor = compute_advantages(
         rewards,
@@ -215,107 +211,3 @@ def compute_decoder_only_grpo_loss(
         "reward_std": float(rewards_tensor.std(unbiased=False).detach().cpu()),
         "completion_length": float(mask.float().sum(dim=1).mean().detach().cpu()),
     }
-
-
-def create_grpo_trainer(
-    model: EncoderDecoder | DecoderOnly,
-    optimizer: Optimizer,
-    compute_loss: Callable[..., tuple[Tensor, dict[str, float]]],
-    compute_loss_kwargs: dict,
-    max_grad_norm: float = 1.0,
-) -> Engine:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    use_amp = device.type == "cuda"
-    model.to(device)
-
-    def train_step(engine: Engine, batch: dict[str, Tensor]) -> dict[str, Any]:
-        _ = engine
-        model.train()
-        optimizer.zero_grad(set_to_none=True)
-
-        with autocast(device_type=device.type, enabled=use_amp, dtype=torch.bfloat16):
-            loss, metrics = compute_loss(model, batch, device=device, **compute_loss_kwargs)
-
-        loss.backward()
-        grad_norm = clip_grad_norm_(model.parameters(), max_grad_norm)
-        optimizer.step()
-
-        return {
-            "loss": loss.detach(),
-            "lr": optimizer.param_groups[0]["lr"],
-            "grad_norm": grad_norm,
-            **metrics,
-        }
-
-    trainer = Engine(train_step)
-    OutputMetric(output_transform=lambda o: o["loss"]).attach(trainer, "loss")
-    OutputMetric(output_transform=lambda o: o["lr"]).attach(trainer, "lr")
-    OutputMetric(output_transform=lambda o: o["grad_norm"]).attach(trainer, "grad_norm")
-    OutputMetric(output_transform=lambda o: o["reward"]).attach(trainer, "reward")
-    OutputMetric(output_transform=lambda o: o["reward_std"]).attach(trainer, "reward_std")
-    OutputMetric(output_transform=lambda o: o["completion_length"]).attach(
-        trainer,
-        "completion_length",
-    )
-    ProgressBar().attach(trainer, metric_names="all")
-    return trainer
-
-
-def create_chrf_evaluator(
-    model: EncoderDecoder | DecoderOnly,
-    compute_predictions: Callable[..., tuple[list[str], list[str]]],
-    compute_predictions_kwargs: dict,
-) -> Engine:
-    device = next(model.parameters()).device
-    use_amp = device.type == "cuda"
-    chrf = CHRF()
-
-    @torch.inference_mode()
-    def evaluate_step(engine: Engine, batch: dict[str, Tensor]):
-        _ = engine
-        model.eval()
-
-        with autocast(device_type=device.type, enabled=use_amp, dtype=torch.bfloat16):
-            predictions, references = compute_predictions(
-                model,
-                batch,
-                device,
-                **compute_predictions_kwargs,
-            )
-
-        return {
-            "predictions": predictions,
-            "references": references,
-        }
-
-    evaluator = Engine(evaluate_step)
-    pbar = ProgressBar(persist=True)
-
-    evaluator.state_dict_user_keys.append("predictions")
-    evaluator.state_dict_user_keys.append("references")
-
-    @no_type_check
-    @evaluator.on(Events.STARTED)
-    def _reset(_):
-        evaluator.state.predictions = []
-        evaluator.state.references = []
-
-    @no_type_check
-    @evaluator.on(Events.ITERATION_COMPLETED)
-    def _accumulate(_):
-        output = evaluator.state.output
-        evaluator.state.predictions.extend(output["predictions"])
-        evaluator.state.references.extend(output["references"])
-
-    @no_type_check
-    @evaluator.on(Events.COMPLETED)
-    def _finalize(_):
-        score = chrf.corpus_score(evaluator.state.predictions, [evaluator.state.references]).score
-        evaluator.state.metrics["chrf"] = float(score)
-
-        if pbar.pbar is not None:
-            pbar.pbar.set_postfix({"chrf": f"{score:.4f}"})
-            pbar.pbar.refresh()
-
-    pbar.attach(evaluator, metric_names="all", closing_event_name=Events.COMPLETED)
-    return evaluator

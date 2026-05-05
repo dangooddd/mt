@@ -6,9 +6,7 @@ import torch
 from ignite.engine import Engine, Events
 from ignite.handlers import ProgressBar, global_step_from_engine
 from ignite.handlers.tensorboard_logger import TensorboardLogger
-from ignite.metrics import Metric
-from ignite.metrics.metric import BatchWise
-from sacrebleu.metrics import BLEU
+from sacrebleu.metrics import BLEU, CHRF
 from tokenizers import Encoding
 from torch import Tensor
 from torch.amp import autocast
@@ -21,22 +19,6 @@ from torch.types import Device
 from mt.models.load import Model
 from mt.models.modules import DecoderOnly, EncoderDecoder
 from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer
-
-
-class OutputMetric(Metric):
-    required_output_keys = None
-
-    def attach(self, engine, name, usage=BatchWise.usage_name):
-        return super().attach(engine, name, usage=usage)
-
-    def reset(self):
-        self._value = None
-
-    def update(self, output):
-        self._value = output
-
-    def compute(self):
-        return self._value
 
 
 class CollateFn:
@@ -251,7 +233,7 @@ def compute_loss(
     batch: dict[str, Any],
     criterion: CrossEntropyLoss,
     device: Device,
-) -> Tensor:
+) -> tuple[Tensor, dict[str, Any]]:
     src_ids = batch["src_ids"].to(device=device)
     tgt_ids = batch["tgt_ids"].to(device=device)
     src_mask = batch["src_mask"].to(device=device)
@@ -264,7 +246,7 @@ def compute_loss(
 
     targets = tgt_ids[:, 1:]
     loss = criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
-    return loss
+    return loss, {}
 
 
 def compute_bilingual_loss(
@@ -272,7 +254,7 @@ def compute_bilingual_loss(
     batch: dict[str, Any],
     criterion: CrossEntropyLoss,
     device: Device,
-) -> Tensor:
+) -> tuple[Tensor, dict[str, Any]]:
     input_ids = batch["input_ids"].to(device=device)
     attention_mask = batch["attention_mask"].to(device=device)
     type_ids = batch["type_ids"].to(device=device)
@@ -288,7 +270,7 @@ def compute_bilingual_loss(
     if not loss_mask.any():
         raise ValueError("Bilingual loss mask is empty: batch contains no target tokens")
     loss = criterion(logits[loss_mask], targets[loss_mask])
-    return loss
+    return loss, {}
 
 
 def compute_predictions(
@@ -343,9 +325,9 @@ def compute_bilingual_predictions(
 def create_trainer(
     model: Model,
     optimizer: Optimizer,
-    criterion: CrossEntropyLoss,
     scheduler: LRScheduler,
-    compute_loss: Callable[..., Tensor],
+    compute_loss: Callable[..., tuple[Tensor, dict[str, Any]]],
+    compute_loss_kwargs: dict,
     max_grad_norm: float = 1.0,
 ) -> Engine:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -358,7 +340,7 @@ def create_trainer(
         optimizer.zero_grad(set_to_none=True)
 
         with autocast(device_type=device.type, enabled=use_amp, dtype=torch.bfloat16):
-            loss = compute_loss(model, batch, criterion=criterion, device=device)
+            loss, metrics = compute_loss(model, batch, device=device, **compute_loss_kwargs)
 
         loss.backward()
         grad_norm = clip_grad_norm_(model.parameters(), max_grad_norm)
@@ -369,26 +351,31 @@ def create_trainer(
             "loss": loss.detach(),
             "lr": optimizer.param_groups[0]["lr"],
             "grad_norm": grad_norm,
+            **metrics,
         }
 
     trainer = Engine(train_step)
-    OutputMetric(output_transform=lambda o: o["grad_norm"]).attach(trainer, "grad_norm")
-    OutputMetric(output_transform=lambda o: o["loss"]).attach(trainer, "loss")
-    OutputMetric(output_transform=lambda o: o["lr"]).attach(trainer, "lr")
+
+    @no_type_check
+    @trainer.on(Events.ITERATION_COMPLETED)
+    def _metrics(engine: Engine):
+        engine.state.metrics.update(engine.state.output)
+
     ProgressBar().attach(trainer, metric_names="all")
     return trainer
 
 
 def create_evaluator(
     model: Model,
-    criterion: CrossEntropyLoss,
-    compute_loss: Callable[..., Tensor],
+    compute_loss: Callable[..., tuple[Tensor, dict[str, Any]]],
+    compute_loss_kwargs: dict,
     compute_predictions: Callable[..., tuple[list[str], list[str]]],
     compute_predictions_kwargs: dict,
 ) -> Engine:
     device = next(model.parameters()).device
     use_amp = device.type == "cuda"
     bleu = BLEU()
+    chrf = CHRF()
 
     @torch.inference_mode()
     def evaluate_step(engine: Engine, batch: dict[str, Tensor]):
@@ -396,7 +383,7 @@ def create_evaluator(
         model.eval()
 
         with autocast(device_type=device.type, enabled=use_amp, dtype=torch.bfloat16):
-            loss = compute_loss(model, batch, criterion=criterion, device=device)
+            loss, _ = compute_loss(model, batch, device=device, **compute_loss_kwargs)
             predictions, references = compute_predictions(
                 model,
                 batch,
@@ -441,11 +428,15 @@ def create_evaluator(
     def _finalize(_):
         loss_ = evaluator.state.loss_sum / max(evaluator.state.num_batches, 1)
         bleu_ = bleu.corpus_score(evaluator.state.predictions, [evaluator.state.references]).score
+        chrf_ = chrf.corpus_score(evaluator.state.predictions, [evaluator.state.references]).score
         evaluator.state.metrics["loss"] = float(loss_)
         evaluator.state.metrics["bleu"] = float(bleu_)
+        evaluator.state.metrics["chrf"] = float(chrf_)
 
         if pbar.pbar is not None:
-            pbar.pbar.set_postfix({"loss": f"{loss_:.6f}", "bleu": f"{bleu_:.4f}"})
+            pbar.pbar.set_postfix(
+                {"loss": f"{loss_:.6f}", "bleu": f"{bleu_:.4f}", "chrf": f"{chrf_:.4f}"}
+            )
             pbar.pbar.refresh()
 
     pbar.attach(evaluator, metric_names="all", closing_event_name=Events.COMPLETED)
