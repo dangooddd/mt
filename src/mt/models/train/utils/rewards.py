@@ -1,30 +1,13 @@
-import logging
-import os
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from collections.abc import Callable
 
 import torch
 from sacrebleu.metrics import BLEU, CHRF
 
+from mt.dataset.score import suppress_output
+
 DEFAULT_COMET_MODEL_NAME = "Unbabel/wmt22-comet-da"
 
 RewardScorer = Callable[[list[str], list[str], list[str]], list[float]]
-
-
-@contextmanager
-def suppress_output() -> Iterator[None]:
-    logger = logging.getLogger()
-    root_level = logger.level
-
-    try:
-        with (
-            open(os.devnull, "w") as devnull,
-            redirect_stdout(devnull),
-            redirect_stderr(devnull),
-        ):
-            yield
-    finally:
-        logger.setLevel(root_level)
 
 
 def create_sacrebleu_reward_scorer(reward: str) -> RewardScorer:

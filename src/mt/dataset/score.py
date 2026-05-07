@@ -1,14 +1,32 @@
+import logging
+import os
 from argparse import ArgumentParser
+from collections.abc import Iterator
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import torch
-import transformers
-from comet import download_model, load_from_checkpoint
-from datasets import load_from_disk
 
 MODEL_NAME = "Unbabel/wmt22-cometkiwi-da"
 BATCH_SIZE = 32
 MAP_BATCH_SIZE = 10000
+
+
+@contextmanager
+def suppress_output() -> Iterator[None]:
+    logger = logging.getLogger()
+    root_level = logger.level
+
+    try:
+        logger.setLevel(logging.ERROR)
+        with (
+            open(os.devnull, "w") as devnull,
+            redirect_stdout(devnull),
+            redirect_stderr(devnull),
+        ):
+            yield
+    finally:
+        logger.setLevel(root_level)
 
 
 def add_scores(
@@ -27,14 +45,15 @@ def add_scores(
         for source, prediction in zip(batch[src], batch[tgt], strict=True)
     ]
 
-    result = scorer.predict(
-        samples,
-        batch_size=batch_size,
-        gpus=1 if torch.cuda.is_available() else 0,
-        progress_bar=True,
-        accelerator="cpu" if not torch.cuda.is_available() else "auto",
-        num_workers=0,
-    )
+    with suppress_output():
+        result = scorer.predict(
+            samples,
+            batch_size=batch_size,
+            gpus=1 if torch.cuda.is_available() else 0,
+            progress_bar=False,
+            accelerator="cpu" if not torch.cuda.is_available() else "auto",
+            num_workers=0,
+        )
 
     return {feature_name: result.scores}
 
@@ -49,10 +68,17 @@ def main():
     parser.add_argument("--tgt", type=str, default="en")
     args = parser.parse_args()
 
+    import transformers
+    from datasets import load_from_disk
+
     transformers.logging.set_verbosity_error()
     dataset = load_from_disk(args.dataset_path)
-    scorer = load_from_checkpoint(download_model(args.model))
-    scorer.eval()
+
+    with suppress_output():
+        from comet import download_model, load_from_checkpoint
+
+        scorer = load_from_checkpoint(download_model(args.model))
+        scorer.eval()
 
     scored = dataset.map(
         add_scores,

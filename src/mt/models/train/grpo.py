@@ -8,7 +8,6 @@ import torch.optim as optim
 from datasets import load_from_disk
 from ignite.engine import Events
 from ignite.handlers import Checkpoint, DiskSaver, global_step_from_engine
-from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader, Dataset
 
 from mt.models.modules import DecoderOnly, EncoderDecoder
@@ -23,9 +22,11 @@ from .utils.pretrain import (
     compute_bilingual_loss,
     compute_bilingual_predictions,
     compute_predictions,
-    compute_loss as compute_pretrain_loss,
     create_evaluator,
     create_trainer,
+)
+from .utils.pretrain import (
+    compute_loss as compute_pretrain_loss,
 )
 from .utils.rewards import create_reward_scorer
 
@@ -43,14 +44,14 @@ def main() -> None:
     parser.add_argument("--log-every", type=int, default=1)
     parser.add_argument("--src", type=str, default="ru")
     parser.add_argument("--tgt", type=str, default="en")
-    parser.add_argument("--lr", type=float, default=1e-6)
+    parser.add_argument("--lr", type=float, default=2e-6)
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
-    parser.add_argument("--batch-size", type=int, default=50)
+    parser.add_argument("--batch-size", type=int, default=25)
     parser.add_argument("--epoch-steps", type=int, default=100)
-    parser.add_argument("--steps", type=int, default=40000)
+    parser.add_argument("--steps", type=int, default=80000)
     parser.add_argument("--max-length", type=int, default=192)
-    parser.add_argument("--num-generations", type=int, default=6)
+    parser.add_argument("--num-generations", type=int, default=8)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--reward", choices=["chrf", "bleu", "comet"], default="chrf")
     parser.add_argument("--comet-model-name", type=str, default="Unbabel/wmt22-comet-da")
@@ -58,9 +59,16 @@ def main() -> None:
     parser.add_argument("--advantage-eps", type=float, default=1e-6)
     parser.add_argument("--clip-eps", type=float, default=0.2)
     parser.add_argument("--kl-beta", type=float, default=0.001)
-    parser.add_argument("--old-policy-update-steps", type=int, default=10)
+    parser.add_argument("--sft-mu", type=float, default=0.05)
+    parser.add_argument("--old-policy-update-steps", type=int, default=1)
     parser.add_argument("--no-load-weights", action="store_true")
     args = parser.parse_args()
+
+    if args.kl_beta < 0.0:
+        raise ValueError("kl-beta must be non-negative")
+
+    if args.sft_mu < 0.0:
+        raise ValueError("sft-mu must be non-negative")
 
     dataset = load_from_disk(args.dataset_path)
     model, tokenizers, _ = load_from_config(args.model_dir, load_weights=not args.no_load_weights)
@@ -92,7 +100,6 @@ def main() -> None:
 
     if isinstance(tokenizers, tuple):
         src_tokenizer, tgt_tokenizer = cast(tuple[BaseTokenizer, BaseTokenizer], tokenizers)
-        criterion = CrossEntropyLoss(ignore_index=tgt_tokenizer.pad_token_id)
         train_collate_fn = EvalCollateFn(
             src_tokenizer=src_tokenizer,
             tgt_tokenizer=tgt_tokenizer,
@@ -121,9 +128,10 @@ def main() -> None:
             "advantage_eps": args.advantage_eps,
             "clip_eps": args.clip_eps,
             "kl_beta": args.kl_beta,
+            "sft_mu": args.sft_mu,
         }
         evaluation_loss_fn = compute_pretrain_loss
-        evaluation_loss_kwargs = {"criterion": criterion}
+        evaluation_loss_kwargs = {}
         predictions_fn = compute_predictions
         predictions_kwargs = {
             "tgt_tokenizer": tgt_tokenizer,
@@ -132,7 +140,6 @@ def main() -> None:
 
     else:
         tokenizer = tokenizers
-        criterion = CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
         train_collate_fn = BilingualEvalCollateFn(
             tokenizer=tokenizer,
             max_length=args.max_length,
@@ -157,9 +164,10 @@ def main() -> None:
             "advantage_eps": args.advantage_eps,
             "clip_eps": args.clip_eps,
             "kl_beta": args.kl_beta,
+            "sft_mu": args.sft_mu,
         }
         evaluation_loss_fn = compute_bilingual_loss
-        evaluation_loss_kwargs = {"criterion": criterion}
+        evaluation_loss_kwargs = {}
         predictions_fn = compute_bilingual_predictions
         predictions_kwargs = {
             "tokenizer": tokenizer,
@@ -236,8 +244,8 @@ def main() -> None:
         DiskSaver(checkpoints_dir / "best", create_dir=True, require_empty=False),
         n_saved=1,
         filename_prefix="best",
-        score_name="chrf",
-        score_function=lambda engine: engine.state.metrics["chrf"],
+        score_name="comet",
+        score_function=lambda engine: engine.state.metrics["comet"],
     )
 
     trainer.add_event_handler(

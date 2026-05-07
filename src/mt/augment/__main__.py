@@ -10,7 +10,7 @@ from typing import Callable, TypedDict
 
 import datasets.config
 from datasets import Dataset, load_from_disk
-from openai import APIStatusError, AsyncOpenAI
+from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
 from ..logging import setup_logger
@@ -34,11 +34,19 @@ $en
 ## Russian version
 $ru
 
-# Output
-Return only one valid JSON object. No markdown, no explanations, no extra text.
+## Output
+Return **valid** JSON object only:
+1. No markdown, no explanations, no extra text.
+2. The first character of the response must be {.
+3. The last character of the response must be }.
+4. All string values must be valid JSON strings, escape quotes and newlines correctly.
+5. Two fields: "aug_en" and "aug_ru" **only**.
 
-Schema:
-{"aug_en":"string","aug_ru":"string"}
+## Schema
+{
+  "aug_en": "string",
+  "aug_ru": "string"
+}
 """
 
 setup_logger("augment")
@@ -56,7 +64,7 @@ def get_client() -> AsyncOpenAI:
     return AsyncOpenAI(
         api_key=os.environ["OPENAI_API_KEY"],
         base_url=os.environ["OPENAI_BASE_URL"],
-        timeout=240,
+        timeout=500,
         max_retries=1,
     )
 
@@ -124,7 +132,7 @@ async def augment(
                 model=model,
                 messages=[message],
             ),
-            timeout=240,
+            timeout=550,
         )
 
         parsed = json.loads(response.choices[0].message.content or "{}")
@@ -138,15 +146,8 @@ async def augment(
         parsed["aug"] = True
         return parsed
 
-    except APIStatusError as e:
-        if e.status_code == 402:
-            raise
-
-        logger.warning(f"API Error during augmentation call: {e}")
-        return {"aug_ru": "", "aug_en": "", "aug": False}
-
     except Exception as e:
-        logger.warning(f"Error during augmentation call: {e}")
+        logger.error(f"Error occured during augmentation call ({type(e).__name__}): {e}")
         return {"aug_ru": "", "aug_en": "", "aug": False}
 
 

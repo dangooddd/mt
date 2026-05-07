@@ -10,15 +10,19 @@ from sacrebleu.metrics import BLEU, CHRF
 from tokenizers import Encoding
 from torch import Tensor
 from torch.amp import autocast
-from torch.nn import CrossEntropyLoss
+from torch.nn import functional as F
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch.types import Device
 
+from mt.dataset.score import suppress_output
 from mt.models.load import Model
 from mt.models.modules import DecoderOnly, EncoderDecoder
 from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer
+
+COMET_MODEL_NAME = "Unbabel/wmt22-comet-da"
+COMET_BATCH_SIZE = 100
 
 
 class CollateFn:
@@ -230,11 +234,46 @@ class BilingualEvalCollateFn:
         }
 
 
+def compute_comet(
+    scorer,
+    sources: list[str | None],
+    predictions: list[str | None],
+    references: list[str | None],
+    batch_size: int = COMET_BATCH_SIZE,
+) -> float:
+    samples = [
+        {"src": source or "", "mt": prediction or "", "ref": reference or ""}
+        for source, prediction, reference in zip(
+            sources,
+            predictions,
+            references,
+            strict=True,
+        )
+    ]
+
+    if not samples:
+        return 0.0
+
+    use_cuda = torch.cuda.is_available()
+    with torch.inference_mode(), suppress_output():
+        result = scorer.predict(
+            samples,
+            batch_size=batch_size,
+            gpus=1 if use_cuda else 0,
+            progress_bar=False,
+            accelerator="auto" if use_cuda else "cpu",
+            num_workers=0,
+        )
+
+    scores = [float(score) for score in result.scores]
+    return sum(scores) / len(scores)
+
+
 def compute_loss(
     model: EncoderDecoder,
     batch: dict[str, Any],
-    criterion: CrossEntropyLoss,
     device: Device,
+    label_smoothing: float = 0.0,
 ) -> tuple[Tensor, dict[str, Any]]:
     src_ids = batch["src_ids"].to(device=device)
     tgt_ids = batch["tgt_ids"].to(device=device)
@@ -247,15 +286,21 @@ def compute_loss(
     )
 
     targets = tgt_ids[:, 1:]
-    loss = criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+    loss = F.cross_entropy(
+        logits.reshape(-1, logits.size(-1)),
+        targets.reshape(-1),
+        ignore_index=model.tgt_pad_token_id,
+        label_smoothing=label_smoothing,
+    )
+
     return loss, {}
 
 
 def compute_bilingual_loss(
     model: DecoderOnly,
     batch: dict[str, Any],
-    criterion: CrossEntropyLoss,
     device: Device,
+    label_smoothing: float = 0.0,
 ) -> tuple[Tensor, dict[str, Any]]:
     input_ids = batch["input_ids"].to(device=device)
     attention_mask = batch["attention_mask"].to(device=device)
@@ -271,7 +316,11 @@ def compute_bilingual_loss(
     loss_mask = attention_mask[:, 1:] & type_ids[:, 1:].eq(1)
     if not loss_mask.any():
         raise ValueError("Bilingual loss mask is empty: batch contains no target tokens")
-    loss = criterion(logits[loss_mask], targets[loss_mask])
+    loss = F.cross_entropy(
+        logits[loss_mask],
+        targets[loss_mask],
+        label_smoothing=label_smoothing,
+    )
     return loss, {}
 
 
@@ -379,6 +428,12 @@ def create_evaluator(
     bleu = BLEU()
     chrf = CHRF()
 
+    with suppress_output():
+        from comet import download_model, load_from_checkpoint
+
+        comet_scorer = load_from_checkpoint(download_model(COMET_MODEL_NAME))
+        comet_scorer.eval()
+
     @torch.inference_mode()
     def evaluate_step(engine: Engine, batch: dict[str, Tensor]):
         _ = engine
@@ -395,6 +450,7 @@ def create_evaluator(
 
         return {
             "loss": float(loss.detach()),
+            "sources": batch["sources"],
             "predictions": predictions,
             "references": references,
             "batch_size": len(references),
@@ -403,6 +459,7 @@ def create_evaluator(
     evaluator = Engine(evaluate_step)
     pbar = ProgressBar(persist=True)
 
+    evaluator.state_dict_user_keys.append("sources")
     evaluator.state_dict_user_keys.append("predictions")
     evaluator.state_dict_user_keys.append("references")
     evaluator.state_dict_user_keys.append("loss_sum")
@@ -411,6 +468,7 @@ def create_evaluator(
     @no_type_check
     @evaluator.on(Events.STARTED)
     def _reset(_):
+        evaluator.state.sources = []
         evaluator.state.predictions = []
         evaluator.state.references = []
         evaluator.state.loss_sum = 0.0
@@ -420,6 +478,7 @@ def create_evaluator(
     @evaluator.on(Events.ITERATION_COMPLETED)
     def _accumulate(_):
         output = evaluator.state.output
+        evaluator.state.sources.extend(output["sources"])
         evaluator.state.predictions.extend(output["predictions"])
         evaluator.state.references.extend(output["references"])
         evaluator.state.loss_sum += output["loss"]
@@ -431,13 +490,26 @@ def create_evaluator(
         loss_ = evaluator.state.loss_sum / max(evaluator.state.num_batches, 1)
         bleu_ = bleu.corpus_score(evaluator.state.predictions, [evaluator.state.references]).score
         chrf_ = chrf.corpus_score(evaluator.state.predictions, [evaluator.state.references]).score
+        comet_ = compute_comet(
+            comet_scorer,
+            evaluator.state.sources,
+            evaluator.state.predictions,
+            evaluator.state.references,
+        )
+
         evaluator.state.metrics["loss"] = float(loss_)
         evaluator.state.metrics["bleu"] = float(bleu_)
         evaluator.state.metrics["chrf"] = float(chrf_)
+        evaluator.state.metrics["comet"] = float(comet_)
 
         if pbar.pbar is not None:
             pbar.pbar.set_postfix(
-                {"loss": f"{loss_:.6f}", "bleu": f"{bleu_:.4f}", "chrf": f"{chrf_:.4f}"}
+                {
+                    "loss": f"{loss_:.6f}",
+                    "bleu": f"{bleu_:.4f}",
+                    "chrf": f"{chrf_:.4f}",
+                    "comet": f"{comet_:.4f}",
+                }
             )
             pbar.pbar.refresh()
 

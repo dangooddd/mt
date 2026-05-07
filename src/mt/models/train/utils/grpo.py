@@ -6,6 +6,8 @@ from torch import Tensor
 from mt.models.modules import DecoderOnly, EncoderDecoder
 from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer
 
+from .pretrain import compute_bilingual_loss
+from .pretrain import compute_loss as compute_pretrain_loss
 from .rewards import RewardScorer
 
 
@@ -156,15 +158,16 @@ def compute_encoder_decoder_grpo_loss(
     advantage_eps: float,
     clip_eps: float,
     kl_beta: float,
+    sft_mu: float,
 ) -> tuple[Tensor, dict[str, Any]]:
-    src_ids = batch["src_ids"].to(device=device)
-    src_mask = batch["src_mask"].to(device=device)
+    sft_src_ids = batch["src_ids"].to(device=device)
+    sft_src_mask = batch["src_mask"].to(device=device)
     sources = cast(list[str], batch["sources"])
     references = cast(list[str], batch["targets"])
-    batch_size = src_ids.size(0)
+    batch_size = sft_src_ids.size(0)
 
-    src_ids = src_ids.repeat_interleave(num_generations, dim=0)
-    src_mask = src_mask.repeat_interleave(num_generations, dim=0)
+    src_ids = sft_src_ids.repeat_interleave(num_generations, dim=0)
+    src_mask = sft_src_mask.repeat_interleave(num_generations, dim=0)
     sources = [source for source in sources for _ in range(num_generations)]
     references = [reference for reference in references for _ in range(num_generations)]
 
@@ -203,7 +206,6 @@ def compute_encoder_decoder_grpo_loss(
         eps=advantage_eps,
     )
 
-    model.eval()
     per_token_logps, _ = encoder_decoder_per_token_logps(
         model,
         src_ids,
@@ -212,7 +214,7 @@ def compute_encoder_decoder_grpo_loss(
         temperature,
     )
 
-    loss, metrics = grpo_loss(
+    grpo_loss_value, metrics = grpo_loss(
         per_token_logps=per_token_logps,
         old_per_token_logps=old_per_token_logps,
         ref_per_token_logps=ref_per_token_logps,
@@ -222,8 +224,17 @@ def compute_encoder_decoder_grpo_loss(
         kl_beta=kl_beta,
     )
 
+    if sft_mu > 0.0:
+        sft_loss, _ = compute_pretrain_loss(model, batch, device=device)
+        loss = (1 - sft_mu) * grpo_loss_value + sft_mu * sft_loss
+    else:
+        sft_loss = grpo_loss_value.detach().new_zeros(())
+        loss = grpo_loss_value
+
     metrics.update(
         {
+            "grpo_loss": float(grpo_loss_value.detach().cpu()),
+            "sft_loss": float(sft_loss.detach().cpu()),
             "reward": float(rewards_tensor.mean().detach().cpu()),
             "reward_std": float(rewards_tensor.std(unbiased=False).detach().cpu()),
             "completion_length": float(mask.float().sum(dim=1).mean().detach().cpu()),
@@ -247,6 +258,7 @@ def compute_decoder_only_grpo_loss(
     advantage_eps: float,
     clip_eps: float,
     kl_beta: float,
+    sft_mu: float,
 ) -> tuple[Tensor, dict[str, Any]]:
     input_ids = batch["inference_input_ids"].to(device=device)
     attention_mask = batch["inference_attention_mask"].to(device=device)
@@ -299,7 +311,6 @@ def compute_decoder_only_grpo_loss(
         eps=advantage_eps,
     )
 
-    model.eval()
     per_token_logps, _ = decoder_only_per_token_logps(
         model,
         input_ids,
@@ -309,7 +320,7 @@ def compute_decoder_only_grpo_loss(
         temperature,
     )
 
-    loss, metrics = grpo_loss(
+    grpo_loss_value, metrics = grpo_loss(
         per_token_logps=per_token_logps,
         old_per_token_logps=old_per_token_logps,
         ref_per_token_logps=ref_per_token_logps,
@@ -319,8 +330,17 @@ def compute_decoder_only_grpo_loss(
         kl_beta=kl_beta,
     )
 
+    if sft_mu > 0.0:
+        sft_loss, _ = compute_bilingual_loss(model, batch, device=device)
+        loss = (1 - sft_mu) * grpo_loss_value + sft_mu * sft_loss
+    else:
+        sft_loss = grpo_loss_value.detach().new_zeros(())
+        loss = grpo_loss_value
+
     metrics.update(
         {
+            "grpo_loss": float(grpo_loss_value.detach().cpu()),
+            "sft_loss": float(sft_loss.detach().cpu()),
             "reward": float(rewards_tensor.mean().detach().cpu()),
             "reward_std": float(rewards_tensor.std(unbiased=False).detach().cpu()),
             "completion_length": float(mask.float().sum(dim=1).mean().detach().cpu()),

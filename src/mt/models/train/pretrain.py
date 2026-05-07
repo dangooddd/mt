@@ -7,7 +7,6 @@ import torch.optim as optim
 from datasets import load_from_disk
 from ignite.engine import Events
 from ignite.handlers import Checkpoint, DiskSaver, global_step_from_engine
-from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader, Dataset
 
 from mt.tokenizers import BaseTokenizer
@@ -59,10 +58,6 @@ def main() -> None:
 
     if isinstance(tokenizers, tuple):
         src_tokenizer, tgt_tokenizer = cast(tuple[BaseTokenizer, BaseTokenizer], tokenizers)
-        criterion = CrossEntropyLoss(
-            ignore_index=tgt_tokenizer.pad_token_id,
-            label_smoothing=args.label_smoothing,
-        )
         train_collate_fn = CollateFn(
             src_tokenizer=src_tokenizer,
             tgt_tokenizer=tgt_tokenizer,
@@ -80,7 +75,7 @@ def main() -> None:
             tgt_column=args.tgt,
         )
         loss_fn = compute_loss
-        loss_kwargs = {"criterion": criterion}
+        loss_kwargs = {"label_smoothing": args.label_smoothing}
         predictions_fn = compute_predictions
         predictions_kwargs = {
             "tgt_tokenizer": tgt_tokenizer,
@@ -89,10 +84,6 @@ def main() -> None:
 
     else:
         tokenizer = tokenizers
-        criterion = CrossEntropyLoss(
-            ignore_index=tokenizer.pad_token_id,
-            label_smoothing=args.label_smoothing,
-        )
         train_collate_fn = BilingualCollateFn(
             tokenizer=tokenizer,
             max_length=args.max_length,
@@ -106,7 +97,7 @@ def main() -> None:
             tgt_column=args.tgt,
         )
         loss_fn = compute_bilingual_loss
-        loss_kwargs = {"criterion": criterion}
+        loss_kwargs = {"label_smoothing": args.label_smoothing}
         predictions_fn = compute_bilingual_predictions
         predictions_kwargs = {
             "tokenizer": tokenizer,
@@ -185,8 +176,8 @@ def main() -> None:
         DiskSaver(checkpoints_dir / "best", create_dir=True, require_empty=False),
         n_saved=1,
         filename_prefix="best",
-        score_name="bleu",
-        score_function=lambda engine: engine.state.metrics["bleu"],
+        score_name="comet",
+        score_function=lambda engine: engine.state.metrics["comet"],
     )
 
     trainer.add_event_handler(
