@@ -68,7 +68,7 @@ class LuongSeq2Seq(EncoderDecoder):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
 
-        self.encoder_emb = nn.Sequential(
+        self.encoder_embedding = nn.Sequential(
             nn.Embedding(
                 src_vocab_size,
                 embedding_dim,
@@ -77,7 +77,7 @@ class LuongSeq2Seq(EncoderDecoder):
             nn.Dropout(dropout),
         )
 
-        self.decoder_emb = nn.Sequential(
+        self.decoder_embedding = nn.Sequential(
             nn.Embedding(
                 tgt_vocab_size,
                 embedding_dim,
@@ -122,10 +122,10 @@ class LuongSeq2Seq(EncoderDecoder):
 
     def init_weights(self):
         for name, p in self.named_parameters():
-            if name == "encoder_emb.0.weight":
+            if name == "encoder_embedding.0.weight":
                 nn.init.normal_(p, mean=0, std=0.01)
                 p.data[self.src_pad_token_id].zero_()
-            elif name == "decoder_emb.0.weight":
+            elif name == "decoder_embedding.0.weight":
                 nn.init.normal_(p, mean=0, std=0.01)
                 p.data[self.tgt_pad_token_id].zero_()
             elif p.dim() > 1:
@@ -133,10 +133,10 @@ class LuongSeq2Seq(EncoderDecoder):
 
     def encode(self, input_ids: Tensor, attention_mask: Tensor):
         lengths = attention_mask.sum(dim=1)
-        emb = self.encoder_emb(input_ids)  # (batch, src_len, embedding_dim)
+        embedding = self.encoder_embedding(input_ids)  # (batch, src_len, embedding_dim)
 
         packed = pack_padded_sequence(
-            emb,
+            embedding,
             lengths.cpu(),
             batch_first=True,
             enforce_sorted=False,
@@ -171,10 +171,10 @@ class LuongSeq2Seq(EncoderDecoder):
         attention_mask: Tensor,
     ):
         # embedding
-        emb = self.decoder_emb(input_id).unsqueeze(1)  # (batch, 1, embedding_dim)
+        embedding = self.decoder_embedding(input_id).unsqueeze(1)  # (batch, 1, embedding_dim)
 
         # decoder
-        decoder_output, (new_hidden, new_cell) = self.decoder(emb, (hidden, cell))
+        decoder_output, (new_hidden, new_cell) = self.decoder(embedding, (hidden, cell))
         decoder_output = self.decoder_norm(decoder_output)
         decoder_hidden = decoder_output.squeeze(1)  # (batch, hidden_dim)
 

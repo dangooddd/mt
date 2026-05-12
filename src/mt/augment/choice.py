@@ -26,13 +26,19 @@ def keep_aug(example):
 def main():
     parser = ArgumentParser("Choose examples with valid augmentation")
     parser.add_argument("--dataset-path", type=Path)
+    parser.add_argument("--split", type=str, nargs="+", default=[])
     args = parser.parse_args()
 
     dataset_path = args.dataset_path
     dataset = load_from_disk(str(dataset_path))
 
     if isinstance(dataset, DatasetDict):
-        for split in list(dataset.keys()):
+        splits = args.split
+
+        if not splits:
+            splits = list(dataset.keys())
+
+        for split in splits:
             dataset[split] = dataset[split].map(
                 keep_aug,
                 remove_columns=dataset[split].column_names,

@@ -24,6 +24,7 @@ from .utils.pretrain import (
     compute_predictions,
     create_evaluator,
     create_trainer,
+    split_decay_params,
 )
 
 
@@ -37,24 +38,33 @@ def main() -> None:
     parser.add_argument("--checkpoints-dir", type=Path, default=Path("data/checkpoints"))
     parser.add_argument("--runs-dir", type=Path, default=Path("data/runs"))
     parser.add_argument("--save-total-limit", type=int, default=10)
-    parser.add_argument("--log-every", type=int, default=100)
+    parser.add_argument("--log-every", type=int, default=25)
     parser.add_argument("--src", type=str, default="ru")
     parser.add_argument("--tgt", type=str, default="en")
     parser.add_argument("--max-lr", type=float, default=0.001)
     parser.add_argument("--min-lr", type=float, default=0.00001)
+    parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--batch-size", type=int, default=100)
-    parser.add_argument("--epoch-steps", type=int, default=2500)
+    parser.add_argument("--epoch-steps", type=int, default=5000)
     parser.add_argument("--warmup-steps", type=int, default=10000)
-    parser.add_argument("--steps", type=int, default=100000)
-    parser.add_argument("--max-length", type=int, default=256)
+    parser.add_argument("--steps", type=int, default=540000)
+    parser.add_argument("--max-length", type=int, default=392)
     parser.add_argument("--label-smoothing", type=float, default=0.1)
+    parser.add_argument("--load-weights", action="store_true")
     args = parser.parse_args()
 
     dataset = load_from_disk(args.dataset_path)
-    model, tokenizers, _ = load_from_config(args.model_dir)
+    model, tokenizers, _ = load_from_config(args.model_dir, args.load_weights)
 
-    optimizer = optim.AdamW(model.parameters(), lr=args.max_lr)
+    decay, no_decay = split_decay_params(model)
+    optimizer = optim.AdamW(
+        [
+            {"params": decay, "weight_decay": args.weight_decay},
+            {"params": no_decay, "weight_decay": 0.0},
+        ],
+        lr=args.max_lr,
+    )
 
     if isinstance(tokenizers, tuple):
         src_tokenizer, tgt_tokenizer = cast(tuple[BaseTokenizer, BaseTokenizer], tokenizers)

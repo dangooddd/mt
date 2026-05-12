@@ -22,7 +22,7 @@ docker run -d \
     "$IMAGE" "$MODEL" \
         --host 0.0.0.0 \
         --port "$PORT" \
-        --tensor-parallel-size 4 \
+        --tensor-parallel-size 2 \
         --max-model-len 256K \
         --max-num-seqs 256 \
         --gpu-memory-utilization 0.95 \

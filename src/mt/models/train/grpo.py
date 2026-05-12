@@ -24,6 +24,7 @@ from .utils.pretrain import (
     compute_predictions,
     create_evaluator,
     create_trainer,
+    decay_params,
 )
 from .utils.pretrain import (
     compute_loss as compute_pretrain_loss,
@@ -45,7 +46,7 @@ def main() -> None:
     parser.add_argument("--src", type=str, default="ru")
     parser.add_argument("--tgt", type=str, default="en")
     parser.add_argument("--lr", type=float, default=2e-6)
-    parser.add_argument("--weight-decay", type=float, default=0.0)
+    parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--batch-size", type=int, default=25)
     parser.add_argument("--epoch-steps", type=int, default=100)
@@ -86,10 +87,13 @@ def main() -> None:
     reference_policy.requires_grad_(False)
     reference_policy.eval()
 
+    decay, no_decay = decay_params(model)
     optimizer = optim.AdamW(
-        model.parameters(),
+        [
+            {"params": decay, "weight_decay": args.weight_decay},
+            {"params": no_decay, "weight_decay": 0.0},
+        ],
         lr=args.lr,
-        weight_decay=args.weight_decay,
     )
 
     scheduler = optim.lr_scheduler.ConstantLR(

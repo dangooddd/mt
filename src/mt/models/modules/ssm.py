@@ -203,12 +203,12 @@ class S4Seq2Seq(EncoderDecoder):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
 
-        self.encoder_emb = nn.Embedding(
+        self.encoder_embedding = nn.Embedding(
             src_vocab_size,
             embedding_dim,
             padding_idx=src_pad_token_id,
         )
-        self.decoder_emb = nn.Embedding(
+        self.decoder_embedding = nn.Embedding(
             tgt_vocab_size,
             embedding_dim,
             padding_idx=tgt_pad_token_id,
@@ -259,7 +259,7 @@ class S4Seq2Seq(EncoderDecoder):
     def encode(self, input_ids: Tensor, attention_mask: Tensor) -> tuple[Tensor, Tensor]:
         lengths = attention_mask.long().sum(dim=1)
 
-        x = self.encoder_emb(input_ids)
+        x = self.encoder_embedding(input_ids)
         x = self.encoder_dropout(x)
         x = self.encoder_in(x)
 
@@ -277,7 +277,7 @@ class S4Seq2Seq(EncoderDecoder):
         return encoder_outputs, context
 
     def decode(self, output_ids: Tensor, context: Tensor) -> Tensor:
-        x = self.decoder_emb(output_ids)
+        x = self.decoder_embedding(output_ids)
         x = self.decoder_dropout(x)
         x = self.decoder_in(x)
 

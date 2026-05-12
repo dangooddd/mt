@@ -398,7 +398,7 @@ class MambaSeq2Seq(EncoderDecoder):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
 
-        self.encoder_emb = nn.Sequential(
+        self.encoder_embedding = nn.Sequential(
             nn.Embedding(
                 src_vocab_size,
                 embedding_dim,
@@ -406,7 +406,7 @@ class MambaSeq2Seq(EncoderDecoder):
             ),
             nn.Dropout(dropout),
         )
-        self.decoder_emb = nn.Sequential(
+        self.decoder_embedding = nn.Sequential(
             nn.Embedding(
                 tgt_vocab_size,
                 embedding_dim,
@@ -461,7 +461,7 @@ class MambaSeq2Seq(EncoderDecoder):
         src_mask = attention_mask.bool()
         lengths = src_mask.long().sum(dim=1)
 
-        x = self.encoder_emb(input_ids)
+        x = self.encoder_embedding(input_ids)
         x = self.encoder_in(x)
         x = apply_padding_mask(x, src_mask)
 
@@ -485,7 +485,7 @@ class MambaSeq2Seq(EncoderDecoder):
         src_mask = attention_mask.bool()
         tgt_mask = output_ids.ne(self.tgt_pad_token_id)
 
-        x = self.decoder_emb(output_ids)
+        x = self.decoder_embedding(output_ids)
         x = self.decoder_in(x)
         x = apply_padding_mask(x, tgt_mask)
 

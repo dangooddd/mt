@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any, no_type_check
 
 import torch
+import torch.nn as nn
 from ignite.engine import Engine, Events
 from ignite.handlers import ProgressBar, global_step_from_engine
 from ignite.handlers.tensorboard_logger import TensorboardLogger
@@ -232,6 +233,20 @@ class BilingualEvalCollateFn:
             "sources": src_texts,
             "targets": targets,
         }
+
+
+def split_decay_params(model: nn.Module):
+    decay = []
+    no_decay = []
+
+    for name, param in model.named_parameters():
+        name = name.lower()
+        if name.endswith(".bias") or "norm" in name or "embedding" in name:
+            no_decay.append(param)
+        else:
+            decay.append(param)
+
+    return decay, no_decay
 
 
 def compute_comet(
