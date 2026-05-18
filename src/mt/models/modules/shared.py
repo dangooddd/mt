@@ -60,10 +60,10 @@ class Attention(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, dropout: float):
+    def __init__(self, d_model: int, num_heads: int, dropout: float, inner_multiplier: int = 2):
         super().__init__()
         self.attention = Attention(d_model, num_heads, dropout)
-        self.ffn = FFN(d_model, d_model * 2)
+        self.ffn = FFN(d_model, d_model * inner_multiplier)
 
     def forward(self, x: Tensor, y: Tensor, mask: Tensor):
         x = x + self.attention(x, y, mask)

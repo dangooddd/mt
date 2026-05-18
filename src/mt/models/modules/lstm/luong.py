@@ -214,6 +214,7 @@ class LuongSeq2Seq(EncoderDecoder):
         attention_mask: Tensor,
         max_length: int = 100,
         temperature: float = 0.0,
+        top_p: float = 1.0,
     ) -> Tensor:
         batch_size = input_ids.size(0)
         device = input_ids.device
@@ -241,7 +242,7 @@ class LuongSeq2Seq(EncoderDecoder):
                 decoder_input.squeeze(1), hidden, cell, encoder_outputs, attention_mask
             )
 
-            next_token = self._sample_next_token(logits, temperature).unsqueeze(1)  # (batch, 1)
+            next_token = self._sample_next_token(logits, temperature, top_p).unsqueeze(1)  # (batch, 1)
 
             mask = ~finished
             sequences[mask, t] = next_token[mask, 0]

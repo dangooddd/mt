@@ -307,6 +307,7 @@ class S4Seq2Seq(EncoderDecoder):
         attention_mask: Tensor,
         max_length: int = 100,
         temperature: float = 0.0,
+        top_p: float = 1.0,
     ) -> Tensor:
         batch_size = input_ids.size(0)
         device = input_ids.device
@@ -325,7 +326,7 @@ class S4Seq2Seq(EncoderDecoder):
 
         for t in range(1, max_length):
             logits_t = self.decode_step(sequences[:, :t], context)
-            next_token = self._sample_next_token(logits_t, temperature)
+            next_token = self._sample_next_token(logits_t, temperature, top_p)
 
             active = ~finished
             sequences[active, t] = next_token[active]

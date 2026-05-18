@@ -36,6 +36,7 @@ class TransformerDecoder(nn.Module):
         d_model: int = 256,
         num_heads: int = 8,
         dropout: float = 0.2,
+        inner_multiplier: int = 2,
     ):
         super().__init__()
 
@@ -49,6 +50,7 @@ class TransformerDecoder(nn.Module):
             d_model,
             num_heads=num_heads,
             dropout=dropout,
+            inner_multiplier=inner_multiplier,
         )
 
     def forward(self, x: Tensor, y: Tensor, mask: Tensor):
@@ -72,6 +74,7 @@ class TransformerSeq2Seq(EncoderDecoder):
         num_heads: int = 8,
         dropout: float = 0.2,
         max_length_in: int = 2048,
+        inner_multiplier: int = 2,
     ):
         super().__init__(
             src_vocab_size=src_vocab_size,
@@ -94,6 +97,7 @@ class TransformerSeq2Seq(EncoderDecoder):
                     d_model=d_model,
                     num_heads=num_heads,
                     dropout=dropout,
+                    inner_multiplier=inner_multiplier,
                 )
                 for _ in range(encoder_layers)
             ]
@@ -105,6 +109,7 @@ class TransformerSeq2Seq(EncoderDecoder):
                     d_model=d_model,
                     num_heads=num_heads,
                     dropout=dropout,
+                    inner_multiplier=inner_multiplier,
                 )
                 for _ in range(decoder_layers)
             ]
@@ -146,6 +151,7 @@ class TransformerSeq2Seq(EncoderDecoder):
         attention_mask: Tensor,
         max_length: int = 128,
         temperature: float = 0.0,
+        top_p: float = 1.0,
     ) -> Tensor:
         batch_size = input_ids.size(0)
         device = input_ids.device
@@ -164,7 +170,7 @@ class TransformerSeq2Seq(EncoderDecoder):
 
         for t in range(1, max_length):
             logits_t = self.decode(sequences[:, :t], encoder_outputs, key_padding_mask)[:, -1, :]
-            next_token = self._sample_next_token(logits_t, temperature)
+            next_token = self._sample_next_token(logits_t, temperature, top_p)
 
             active = ~finished
             sequences[active, t] = next_token[active]

@@ -6,6 +6,8 @@ from torch import Tensor
 from mt.models.modules import DecoderOnly, EncoderDecoder
 from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer
 
+from .pretrain import compute_decoder_loss
+from .pretrain import compute_loss as compute_pretrain_loss
 from .rewards import RewardScorer
 
 
@@ -32,31 +34,43 @@ def compute_advantages(
     return advantages.reshape(-1), rewards_tensor
 
 
-def reinforce_loss(
+def dapo_loss(
     per_token_logps: Tensor,
+    old_per_token_logps: Tensor,
     ref_per_token_logps: Tensor,
     mask: Tensor,
     advantages: Tensor,
+    clip_eps_low: float,
+    clip_eps_high: float,
     kl_beta: float,
 ) -> tuple[Tensor, dict[str, Any]]:
     advantages = advantages.detach().view(-1, 1).to(dtype=per_token_logps.dtype)
     mask = mask.to(dtype=per_token_logps.dtype)
 
-    per_token_policy_loss = -per_token_logps * advantages
-    per_token_kl = (
-        torch.exp(ref_per_token_logps - per_token_logps)
-        - (ref_per_token_logps - per_token_logps)
-        - 1.0
+    per_token_ratio = torch.exp(per_token_logps - old_per_token_logps)
+    per_token_clipped_ratio = per_token_ratio.clamp(1.0 - clip_eps_low, 1.0 + clip_eps_high)
+    per_token_policy_loss = -torch.min(
+        per_token_ratio * advantages,
+        per_token_clipped_ratio * advantages,
     )
+    kl_delta = torch.clamp(ref_per_token_logps - per_token_logps, min=-20.0, max=20.0)
+    per_token_kl = torch.exp(kl_delta) - kl_delta - 1.0
 
-    sequence_token_count = mask.sum(dim=1).clamp_min(1.0)
-    policy_loss = ((per_token_policy_loss * mask).sum(dim=1) / sequence_token_count).mean()
-    kl = ((per_token_kl * mask).sum(dim=1) / sequence_token_count).mean()
+    token_count = mask.sum().clamp_min(1.0)
+    policy_loss = (per_token_policy_loss * mask).sum() / token_count
+    kl = (per_token_kl * mask).sum() / token_count
     loss = policy_loss + kl_beta * kl
+
+    clip_fraction = (
+        ((per_token_ratio - per_token_clipped_ratio).abs() > 0) * mask
+    ).sum() / token_count
+    ratio = (per_token_ratio * mask).sum() / token_count
 
     return loss, {
         "policy_loss": float(policy_loss.detach().cpu()),
         "kl": float(kl.detach().cpu()),
+        "clip_fraction": float(clip_fraction.detach().cpu()),
+        "ratio": float(ratio.detach().cpu()),
     }
 
 
@@ -66,6 +80,7 @@ def encoder_decoder_per_token_logps(
     src_mask: Tensor,
     generated_ids: Tensor,
     temperature: float,
+    top_p: float,
 ) -> tuple[Tensor, Tensor]:
     decoder_input = generated_ids[:, :-1]
     targets = generated_ids[:, 1:]
@@ -86,6 +101,7 @@ def decoder_only_per_token_logps(
     type_ids: Tensor,
     generated_ids: Tensor,
     temperature: float,
+    top_p: float,
 ) -> tuple[Tensor, Tensor]:
     batch_size, generated_length = generated_ids.shape
     prompt_lengths = attention_mask.long().sum(dim=1).clamp_min(1)
@@ -127,46 +143,61 @@ def decoder_only_per_token_logps(
     return per_token_logps, loss_mask
 
 
-def compute_encoder_decoder_reinforce_loss(
+def compute_encoder_decoder_dapo_loss(
     model: EncoderDecoder,
     batch: dict[str, Any],
     device: torch.device,
+    old_policy: EncoderDecoder,
     reference_policy: EncoderDecoder,
     tgt_tokenizer: BaseTokenizer,
     reward_scorer: RewardScorer,
     num_generations: int,
     max_length: int,
     temperature: float,
+    top_p: float,
     advantage_eps: float,
+    clip_eps_low: float,
+    clip_eps_high: float,
     kl_beta: float,
+    sft_mu: float,
 ) -> tuple[Tensor, dict[str, Any]]:
-    src_ids = batch["src_ids"].to(device=device)
-    src_mask = batch["src_mask"].to(device=device)
+    sft_src_ids = batch["src_ids"].to(device=device)
+    sft_src_mask = batch["src_mask"].to(device=device)
     sources = cast(list[str], batch["sources"])
     references = cast(list[str], batch["targets"])
-    batch_size = src_ids.size(0)
+    batch_size = sft_src_ids.size(0)
 
-    src_ids = src_ids.repeat_interleave(num_generations, dim=0)
-    src_mask = src_mask.repeat_interleave(num_generations, dim=0)
+    src_ids = sft_src_ids.repeat_interleave(num_generations, dim=0)
+    src_mask = sft_src_mask.repeat_interleave(num_generations, dim=0)
     sources = [source for source in sources for _ in range(num_generations)]
     references = [reference for reference in references for _ in range(num_generations)]
 
-    model.eval()
+    old_policy.eval()
     reference_policy.eval()
 
     with torch.no_grad():
-        generated_ids = model.inference(
+        generated_ids = old_policy.inference(
             src_ids,
             src_mask,
             max_length,
             temperature=temperature,
+            top_p=top_p,
         )
-        ref_per_token_logps, mask = encoder_decoder_per_token_logps(
+        old_per_token_logps, mask = encoder_decoder_per_token_logps(
+            old_policy,
+            src_ids,
+            src_mask,
+            generated_ids,
+            temperature,
+            top_p,
+        )
+        ref_per_token_logps, _ = encoder_decoder_per_token_logps(
             reference_policy,
             src_ids,
             src_mask,
             generated_ids,
             temperature,
+            top_p,
         )
 
     predictions = tgt_tokenizer.decode_batch(generated_ids.cpu().tolist())
@@ -185,18 +216,31 @@ def compute_encoder_decoder_reinforce_loss(
         src_mask,
         generated_ids,
         temperature,
+        top_p,
     )
 
-    loss, metrics = reinforce_loss(
+    dapo_loss_value, metrics = dapo_loss(
         per_token_logps=per_token_logps,
+        old_per_token_logps=old_per_token_logps,
         ref_per_token_logps=ref_per_token_logps,
         mask=mask,
         advantages=advantages,
+        clip_eps_low=clip_eps_low,
+        clip_eps_high=clip_eps_high,
         kl_beta=kl_beta,
     )
 
+    if sft_mu > 0.0:
+        sft_loss, _ = compute_pretrain_loss(model, batch, device=device)
+        loss = (1 - sft_mu) * dapo_loss_value + sft_mu * sft_loss
+    else:
+        sft_loss = dapo_loss_value.detach().new_zeros(())
+        loss = dapo_loss_value
+
     metrics.update(
         {
+            "dapo_loss": float(dapo_loss_value.detach().cpu()),
+            "sft_loss": float(sft_loss.detach().cpu()),
             "reward": float(rewards_tensor.mean().detach().cpu()),
             "reward_std": float(rewards_tensor.std(unbiased=False).detach().cpu()),
             "completion_length": float(mask.float().sum(dim=1).mean().detach().cpu()),
@@ -206,18 +250,23 @@ def compute_encoder_decoder_reinforce_loss(
     return loss, metrics
 
 
-def compute_decoder_only_reinforce_loss(
+def compute_decoder_only_dapo_loss(
     model: DecoderOnly,
     batch: dict[str, Any],
     device: torch.device,
+    old_policy: DecoderOnly,
     reference_policy: DecoderOnly,
     tokenizer: BilingualBaseTokenizer,
     reward_scorer: RewardScorer,
     num_generations: int,
     max_length: int,
     temperature: float,
+    top_p: float,
     advantage_eps: float,
+    clip_eps_low: float,
+    clip_eps_high: float,
     kl_beta: float,
+    sft_mu: float,
 ) -> tuple[Tensor, dict[str, Any]]:
     input_ids = batch["inference_input_ids"].to(device=device)
     attention_mask = batch["inference_attention_mask"].to(device=device)
@@ -232,24 +281,35 @@ def compute_decoder_only_reinforce_loss(
     sources = [source for source in sources for _ in range(num_generations)]
     references = [reference for reference in references for _ in range(num_generations)]
 
-    model.eval()
+    old_policy.eval()
     reference_policy.eval()
 
     with torch.no_grad():
-        generated_ids = model.inference(
+        generated_ids = old_policy.inference(
             input_ids,
             attention_mask,
             type_ids,
             max_length,
             temperature=temperature,
+            top_p=top_p,
         )
-        ref_per_token_logps, mask = decoder_only_per_token_logps(
+        old_per_token_logps, mask = decoder_only_per_token_logps(
+            old_policy,
+            input_ids,
+            attention_mask,
+            type_ids,
+            generated_ids,
+            temperature,
+            top_p,
+        )
+        ref_per_token_logps, _ = decoder_only_per_token_logps(
             reference_policy,
             input_ids,
             attention_mask,
             type_ids,
             generated_ids,
             temperature,
+            top_p,
         )
 
     predictions = tokenizer.decode_batch(generated_ids.cpu().tolist())
@@ -269,18 +329,31 @@ def compute_decoder_only_reinforce_loss(
         type_ids,
         generated_ids,
         temperature,
+        top_p,
     )
 
-    loss, metrics = reinforce_loss(
+    dapo_loss_value, metrics = dapo_loss(
         per_token_logps=per_token_logps,
+        old_per_token_logps=old_per_token_logps,
         ref_per_token_logps=ref_per_token_logps,
         mask=mask,
         advantages=advantages,
+        clip_eps_low=clip_eps_low,
+        clip_eps_high=clip_eps_high,
         kl_beta=kl_beta,
     )
 
+    if sft_mu > 0.0:
+        sft_loss, _ = compute_decoder_loss(model, batch, device=device)
+        loss = (1 - sft_mu) * dapo_loss_value + sft_mu * sft_loss
+    else:
+        sft_loss = dapo_loss_value.detach().new_zeros(())
+        loss = dapo_loss_value
+
     metrics.update(
         {
+            "dapo_loss": float(dapo_loss_value.detach().cpu()),
+            "sft_loss": float(sft_loss.detach().cpu()),
             "reward": float(rewards_tensor.mean().detach().cpu()),
             "reward_std": float(rewards_tensor.std(unbiased=False).detach().cpu()),
             "completion_length": float(mask.float().sum(dim=1).mean().detach().cpu()),

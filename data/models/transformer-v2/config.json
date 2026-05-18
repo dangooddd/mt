@@ -1,13 +1,14 @@
 {
-  "model": "transformer",
-  "args": {
-    "encoder_layers": 6,
-    "decoder_layers": 6,
-    "d_model": 768,
-    "num_heads": 16,
-    "dropout": 0.1,
-    "max_length_in": 2048
-  },
-  "src_tokenizer": "unigram",
-  "tgt_tokenizer": "unigram"
+    "model": "transformer",
+    "args": {
+        "encoder_layers": 6,
+        "decoder_layers": 6,
+        "d_model": 768,
+        "num_heads": 16,
+        "dropout": 0.05,
+        "max_length_in": 2048,
+        "inner_multiplier": 2
+    },
+    "src_tokenizer": "unigram",
+    "tgt_tokenizer": "unigram"
 }

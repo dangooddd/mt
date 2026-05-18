@@ -13,13 +13,13 @@ from mt.tokenizers import BaseTokenizer
 
 from ..load import load_from_config
 from .utils.pretrain import (
-    BilingualCollateFn,
-    BilingualEvalCollateFn,
+    DecoderCollateFn,
+    DecoderEvalCollateFn,
     CollateFn,
     EvalCollateFn,
     attach_tensorboard_logging,
-    compute_bilingual_loss,
-    compute_bilingual_predictions,
+    compute_decoder_loss,
+    compute_decoder_predictions,
     compute_loss,
     compute_predictions,
     create_evaluator,
@@ -37,20 +37,22 @@ def main() -> None:
     parser.add_argument("--validation-split", type=str, default="validation")
     parser.add_argument("--checkpoints-dir", type=Path, default=Path("data/checkpoints"))
     parser.add_argument("--runs-dir", type=Path, default=Path("data/runs"))
-    parser.add_argument("--save-total-limit", type=int, default=10)
+    parser.add_argument("--save-total-limit", type=int, default=5)
     parser.add_argument("--log-every", type=int, default=25)
     parser.add_argument("--src", type=str, default="ru")
     parser.add_argument("--tgt", type=str, default="en")
-    parser.add_argument("--max-lr", type=float, default=0.001)
-    parser.add_argument("--min-lr", type=float, default=0.00001)
-    parser.add_argument("--weight-decay", type=float, default=0.01)
-    parser.add_argument("--max-grad-norm", type=float, default=1.0)
-    parser.add_argument("--batch-size", type=int, default=100)
-    parser.add_argument("--epoch-steps", type=int, default=5000)
-    parser.add_argument("--warmup-steps", type=int, default=10000)
-    parser.add_argument("--steps", type=int, default=540000)
-    parser.add_argument("--max-length", type=int, default=392)
-    parser.add_argument("--label-smoothing", type=float, default=0.1)
+    parser.add_argument("--max-lr", type=float, default=0.0005)
+    parser.add_argument("--min-lr", type=float, default=0.00005)
+    parser.add_argument("--weight-decay", type=float, default=0.005)
+    parser.add_argument("--adam-beta1", type=float, default=0.9)
+    parser.add_argument("--adam-beta2", type=float, default=0.998)
+    parser.add_argument("--max-grad-norm", type=float, default=2.0)
+    parser.add_argument("--batch-size", type=int, default=48)
+    parser.add_argument("--epoch-steps", type=int, default=10000)
+    parser.add_argument("--warmup-steps", type=int, default=20000)
+    parser.add_argument("--steps", type=int, default=1000000)
+    parser.add_argument("--max-length", type=int, default=512)
+    parser.add_argument("--label-smoothing", type=float, default=0.05)
     parser.add_argument("--load-weights", action="store_true")
     args = parser.parse_args()
 
@@ -64,6 +66,7 @@ def main() -> None:
             {"params": no_decay, "weight_decay": 0.0},
         ],
         lr=args.max_lr,
+        betas=(args.adam_beta1, args.adam_beta2),
     )
 
     if isinstance(tokenizers, tuple):
@@ -94,21 +97,21 @@ def main() -> None:
 
     else:
         tokenizer = tokenizers
-        train_collate_fn = BilingualCollateFn(
+        train_collate_fn = DecoderCollateFn(
             tokenizer=tokenizer,
             max_length=args.max_length,
             src_column=args.src,
             tgt_column=args.tgt,
         )
-        evaluation_collate_fn = BilingualEvalCollateFn(
+        evaluation_collate_fn = DecoderEvalCollateFn(
             tokenizer=tokenizer,
             max_length=args.max_length,
             src_column=args.src,
             tgt_column=args.tgt,
         )
-        loss_fn = compute_bilingual_loss
+        loss_fn = compute_decoder_loss
         loss_kwargs = {"label_smoothing": args.label_smoothing}
-        predictions_fn = compute_bilingual_predictions
+        predictions_fn = compute_decoder_predictions
         predictions_kwargs = {
             "tokenizer": tokenizer,
             "max_length": args.max_length,
@@ -116,7 +119,7 @@ def main() -> None:
 
     warmup_scheduler = optim.lr_scheduler.LinearLR(
         optimizer,
-        start_factor=0.1,
+        start_factor=0.01,
         end_factor=1.0,
         total_iters=args.warmup_steps,
     )

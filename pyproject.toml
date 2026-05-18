@@ -16,10 +16,14 @@ dependencies = [
     "unbabel-comet>=2.2.7",
     "torch>=2.11.0",
     "mamba-ssm[causal-conv1d]>=2.3.1",
+    "flash-attn>=2.8.3",
 ]
 
 [tool.ruff]
 line-length = 100
+
+[tool.uv.extra-build-dependencies]
+flash-attn = ["packaging", "ninja", { requirement = "torch", match-runtime = true }]
 
 [tool.uv]
 package = true

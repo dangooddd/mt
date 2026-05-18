@@ -8,6 +8,7 @@ from ..tokenizers import TOKENIZER_CLASSES, BaseTokenizer, BilingualBaseTokenize
 from .modules import (
     DecoderOnly,
     EncoderDecoder,
+    ExperimentalTransformerSeq2Seq,
     LstmSeq2Seq,
     LuongSeq2Seq,
     Mamba2HybridSeq2Seq,
@@ -33,14 +34,16 @@ MODEL_CLASSES: dict[str, Model] = {
     "mamba-hybrid": MambaHybridSeq2Seq,
     "ssm": S4Seq2Seq,
     "transformer": TransformerSeq2Seq,
+    "transformer-experimental": ExperimentalTransformerSeq2Seq,
     "transformer-decoder": TransformerDecoder,
 }
 
 
 def load_from_config(
-    model_dir: Path,
+    model_dir: str | Path,
     load_weights: bool = False,
 ) -> tuple[Model, Tokenizer, dict[str, Any]]:
+    model_dir = Path(model_dir)
     config_path = model_dir / "config.json"
 
     if not config_path.exists():

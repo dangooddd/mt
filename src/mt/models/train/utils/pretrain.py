@@ -120,7 +120,7 @@ class EvalCollateFn:
         }
 
 
-class BilingualCollateFn:
+class DecoderCollateFn:
     def __init__(
         self,
         tokenizer: BilingualBaseTokenizer,
@@ -174,7 +174,7 @@ class BilingualCollateFn:
         }
 
 
-class BilingualEvalCollateFn:
+class DecoderEvalCollateFn:
     def __init__(
         self,
         tokenizer: BilingualBaseTokenizer,
@@ -241,7 +241,7 @@ def split_decay_params(model: nn.Module):
 
     for name, param in model.named_parameters():
         name = name.lower()
-        if name.endswith(".bias") or "norm" in name or "embedding" in name:
+        if name.endswith(".bias") or ("norm" in name) or ("embedding" in name):
             no_decay.append(param)
         else:
             decay.append(param)
@@ -311,7 +311,7 @@ def compute_loss(
     return loss, {}
 
 
-def compute_bilingual_loss(
+def compute_decoder_loss(
     model: DecoderOnly,
     batch: dict[str, Any],
     device: Device,
@@ -330,7 +330,7 @@ def compute_bilingual_loss(
     targets = input_ids[:, 1:]
     loss_mask = attention_mask[:, 1:] & type_ids[:, 1:].eq(1)
     if not loss_mask.any():
-        raise ValueError("Bilingual loss mask is empty: batch contains no target tokens")
+        raise ValueError("Decoder loss mask is empty: batch contains no target tokens")
     loss = F.cross_entropy(
         logits[loss_mask],
         targets[loss_mask],
@@ -346,6 +346,7 @@ def compute_predictions(
     tgt_tokenizer: BaseTokenizer,
     max_length: int = 1024,
     temperature: float = 0.0,
+    top_p: float = 1.0,
 ) -> tuple[list[str], list[str]]:
     src_ids = batch["src_ids"].to(device=device)
     src_mask = batch["src_mask"].to(device=device)
@@ -355,19 +356,21 @@ def compute_predictions(
         src_mask,
         max_length,
         temperature=temperature,
+        top_p=top_p,
     )
     predictions = tgt_tokenizer.decode_batch(generated_ids.cpu().tolist())
     references = batch["targets"]
     return predictions, references
 
 
-def compute_bilingual_predictions(
+def compute_decoder_predictions(
     model: DecoderOnly,
     batch: dict[str, Any],
     device: Device,
     tokenizer: BilingualBaseTokenizer,
     max_length: int = 1024,
     temperature: float = 0.0,
+    top_p: float = 1.0,
 ) -> tuple[list[str], list[str]]:
     input_ids = batch.get("inference_input_ids", batch["input_ids"]).to(device=device)
     attention_mask = batch.get("inference_attention_mask", batch["attention_mask"]).to(
@@ -381,6 +384,7 @@ def compute_bilingual_predictions(
         type_ids,
         max_length,
         temperature=temperature,
+        top_p=top_p,
     )
     predictions = tokenizer.decode_batch(generated_ids.cpu().tolist())
     references = batch["targets"]

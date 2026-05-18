@@ -140,6 +140,7 @@ class MambaConvSeq2Seq(EncoderDecoder):
         attention_mask: Tensor,
         max_length: int = 128,
         temperature: float = 0.0,
+        top_p: float = 1.0,
     ) -> Tensor:
         batch_size = input_ids.size(0)
         device = input_ids.device
@@ -158,7 +159,7 @@ class MambaConvSeq2Seq(EncoderDecoder):
 
         for t in range(1, max_length):
             logits_t = self.decode(sequences[:, :t], encoder_outputs, key_padding_mask)[:, -1, :]
-            next_token = self._sample_next_token(logits_t, temperature)
+            next_token = self._sample_next_token(logits_t, temperature, top_p)
 
             active = ~finished
             sequences[active, t] = next_token[active]

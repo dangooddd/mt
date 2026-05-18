@@ -14,27 +14,24 @@ from mt.models.modules import DecoderOnly, EncoderDecoder
 from mt.tokenizers import BaseTokenizer
 
 from ..load import load_from_config
+from .utils.dapo import compute_decoder_only_dapo_loss, compute_encoder_decoder_dapo_loss
 from .utils.pretrain import (
-    BilingualEvalCollateFn,
+    DecoderEvalCollateFn,
     EvalCollateFn,
     attach_tensorboard_logging,
-    compute_bilingual_loss,
-    compute_bilingual_predictions,
+    compute_decoder_loss,
+    compute_decoder_predictions,
     compute_predictions,
-    compute_loss as compute_pretrain_loss,
     create_evaluator,
     create_trainer,
-    decay_params,
+    split_decay_params,
 )
-from .utils.reinforce import (
-    compute_decoder_only_reinforce_loss,
-    compute_encoder_decoder_reinforce_loss,
-)
+from .utils.pretrain import compute_loss as compute_pretrain_loss
 from .utils.rewards import create_reward_scorer
 
 
 def main() -> None:
-    parser = ArgumentParser("Train MT model with group REINFORCE")
+    parser = ArgumentParser("Train MT model with DAPO")
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--dataset-path", type=str, required=True)
     parser.add_argument("--experiment", type=str, default=None)
@@ -46,25 +43,35 @@ def main() -> None:
     parser.add_argument("--log-every", type=int, default=1)
     parser.add_argument("--src", type=str, default="ru")
     parser.add_argument("--tgt", type=str, default="en")
-    parser.add_argument("--lr", type=float, default=1e-6)
+    parser.add_argument("--lr", type=float, default=2e-6)
     parser.add_argument("--weight-decay", type=float, default=0.01)
+    parser.add_argument("--adam-beta1", type=float, default=0.9)
+    parser.add_argument("--adam-beta2", type=float, default=0.999)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
-    parser.add_argument("--batch-size", type=int, default=50)
-    parser.add_argument("--epoch-steps", type=int, default=100)
-    parser.add_argument("--steps", type=int, default=40000)
+    parser.add_argument("--batch-size", type=int, default=25)
+    parser.add_argument("--epoch-steps", type=int, default=250)
+    parser.add_argument("--steps", type=int, default=216000)
     parser.add_argument("--max-length", type=int, default=192)
     parser.add_argument("--num-generations", type=int, default=6)
     parser.add_argument("--temperature", type=float, default=0.7)
-    parser.add_argument("--reward", choices=["chrf", "bleu", "comet"], default="chrf")
+    parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument("--reward", choices=["chrf", "bleu", "comet"], default="comet")
     parser.add_argument("--comet-model-name", type=str, default="Unbabel/wmt22-comet-da")
     parser.add_argument("--comet-batch-size", type=int, default=100)
     parser.add_argument("--advantage-eps", type=float, default=1e-6)
-    parser.add_argument("--kl-beta", type=float, default=0.001)
+    parser.add_argument("--clip-eps-low", type=float, default=0.2)
+    parser.add_argument("--clip-eps-high", type=float, default=0.3)
+    parser.add_argument("--kl-beta", type=float, default=0.0005)
+    parser.add_argument("--sft-mu", type=float, default=0.0)
+    parser.add_argument("--old-policy-update-steps", type=int, default=1)
     parser.add_argument("--no-load-weights", action="store_true")
     args = parser.parse_args()
 
     if args.kl_beta < 0.0:
         raise ValueError("kl-beta must be non-negative")
+
+    if args.sft_mu < 0.0:
+        raise ValueError("sft-mu must be non-negative")
 
     dataset = load_from_disk(args.dataset_path)
     model, tokenizers, _ = load_from_config(args.model_dir, load_weights=not args.no_load_weights)
@@ -74,17 +81,22 @@ def main() -> None:
         comet_batch_size=args.comet_batch_size,
     )
 
+    old_policy = deepcopy(model)
+    old_policy.requires_grad_(False)
+    old_policy.eval()
+
     reference_policy = deepcopy(model)
     reference_policy.requires_grad_(False)
     reference_policy.eval()
 
-    decay, no_decay = decay_params(model)
+    decay, no_decay = split_decay_params(model)
     optimizer = optim.AdamW(
         [
             {"params": decay, "weight_decay": args.weight_decay},
             {"params": no_decay, "weight_decay": 0.0},
         ],
         lr=args.lr,
+        betas=(args.adam_beta1, args.adam_beta2),
     )
 
     scheduler = optim.lr_scheduler.ConstantLR(
@@ -111,16 +123,21 @@ def main() -> None:
             src_column=args.src,
             tgt_column=args.tgt,
         )
-        train_loss_fn = compute_encoder_decoder_reinforce_loss
+        train_loss_fn = compute_encoder_decoder_dapo_loss
         train_loss_kwargs = {
+            "old_policy": cast(EncoderDecoder, old_policy),
             "reference_policy": cast(EncoderDecoder, reference_policy),
             "tgt_tokenizer": tgt_tokenizer,
             "reward_scorer": reward_scorer,
             "num_generations": args.num_generations,
             "max_length": args.max_length,
             "temperature": args.temperature,
+            "top_p": args.top_p,
             "advantage_eps": args.advantage_eps,
+            "clip_eps_low": args.clip_eps_low,
+            "clip_eps_high": args.clip_eps_high,
             "kl_beta": args.kl_beta,
+            "sft_mu": args.sft_mu,
         }
         evaluation_loss_fn = compute_pretrain_loss
         evaluation_loss_kwargs = {}
@@ -132,32 +149,37 @@ def main() -> None:
 
     else:
         tokenizer = tokenizers
-        train_collate_fn = BilingualEvalCollateFn(
+        train_collate_fn = DecoderEvalCollateFn(
             tokenizer=tokenizer,
             max_length=args.max_length,
             src_column=args.src,
             tgt_column=args.tgt,
         )
-        evaluation_collate_fn = BilingualEvalCollateFn(
+        evaluation_collate_fn = DecoderEvalCollateFn(
             tokenizer=tokenizer,
             max_length=args.max_length,
             src_column=args.src,
             tgt_column=args.tgt,
         )
-        train_loss_fn = compute_decoder_only_reinforce_loss
+        train_loss_fn = compute_decoder_only_dapo_loss
         train_loss_kwargs = {
+            "old_policy": cast(DecoderOnly, old_policy),
             "reference_policy": cast(DecoderOnly, reference_policy),
             "tokenizer": tokenizer,
             "reward_scorer": reward_scorer,
             "num_generations": args.num_generations,
             "max_length": args.max_length,
             "temperature": args.temperature,
+            "top_p": args.top_p,
             "advantage_eps": args.advantage_eps,
+            "clip_eps_low": args.clip_eps_low,
+            "clip_eps_high": args.clip_eps_high,
             "kl_beta": args.kl_beta,
+            "sft_mu": args.sft_mu,
         }
-        evaluation_loss_fn = compute_bilingual_loss
+        evaluation_loss_fn = compute_decoder_loss
         evaluation_loss_kwargs = {}
-        predictions_fn = compute_bilingual_predictions
+        predictions_fn = compute_decoder_predictions
         predictions_kwargs = {
             "tokenizer": tokenizer,
             "max_length": args.max_length,
@@ -196,9 +218,23 @@ def main() -> None:
     )
 
     device = next(model.parameters()).device
+    old_policy.to(device)
     reference_policy.to(device)
 
-    experiment = args.experiment or f"{args.model_dir.name}-reinforce"
+    def sync_old_policy() -> None:
+        old_policy.load_state_dict(model.state_dict())
+        old_policy.requires_grad_(False)
+        old_policy.eval()
+
+    @trainer.on(Events.STARTED)
+    def _sync_old_policy_on_start(_):
+        sync_old_policy()
+
+    @trainer.on(Events.ITERATION_COMPLETED(every=args.old_policy_update_steps))
+    def _sync_old_policy_on_interval(_):
+        sync_old_policy()
+
+    experiment = args.experiment or f"{args.model_dir.name}-dapo"
     checkpoints_dir = args.checkpoints_dir / experiment
     runs_dir = args.runs_dir / experiment
 
@@ -211,7 +247,7 @@ def main() -> None:
         },
         DiskSaver(checkpoints_dir, create_dir=True, require_empty=False),
         n_saved=args.save_total_limit,
-        filename_prefix="reinforce",
+        filename_prefix="dapo",
     )
 
     best_checkpoint_handler = Checkpoint(

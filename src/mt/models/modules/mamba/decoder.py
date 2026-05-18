@@ -155,6 +155,7 @@ class MambaDecoder(DecoderOnly):
         type_ids: Tensor,
         max_length: int = 256,
         temperature: float = 0.0,
+        top_p: float = 1.0,
     ) -> Tensor:
         batch_size, input_length = input_ids.shape
         device = input_ids.device
@@ -183,7 +184,7 @@ class MambaDecoder(DecoderOnly):
             current_length = int(lengths.max().item())
             logits = self.decode(hidden[:, :current_length])
             last_logits = logits[torch.arange(batch_size, device=device), lengths - 1]
-            next_token = self._sample_next_token(last_logits, temperature)
+            next_token = self._sample_next_token(last_logits, temperature, top_p)
 
             active = ~finished
             positions = lengths[active]

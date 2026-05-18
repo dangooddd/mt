@@ -256,6 +256,7 @@ class MambaSeq2Seq(EncoderDecoder):
         attention_mask: Tensor,
         max_length: int = 128,
         temperature: float = 0.0,
+        top_p: float = 1.0,
     ):
         batch_size = input_ids.size(0)
         device = input_ids.device
@@ -279,7 +280,7 @@ class MambaSeq2Seq(EncoderDecoder):
                 encoder_outputs,
                 ~attention_mask.bool(),
             )
-            next_token = self._sample_next_token(logits, temperature).squeeze(1)
+            next_token = self._sample_next_token(logits, temperature, top_p).squeeze(1)
 
             mask = ~finished
             sequences[mask, t] = next_token[mask]

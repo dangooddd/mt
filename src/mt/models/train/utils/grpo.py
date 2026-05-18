@@ -6,7 +6,7 @@ from torch import Tensor
 from mt.models.modules import DecoderOnly, EncoderDecoder
 from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer
 
-from .pretrain import compute_bilingual_loss
+from .pretrain import compute_decoder_loss
 from .pretrain import compute_loss as compute_pretrain_loss
 from .rewards import RewardScorer
 
@@ -52,11 +52,8 @@ def grpo_loss(
         per_token_ratio * advantages,
         per_token_clipped_ratio * advantages,
     )
-    per_token_kl = (
-        torch.exp(ref_per_token_logps - per_token_logps)
-        - (ref_per_token_logps - per_token_logps)
-        - 1.0
-    )
+    kl_delta = torch.clamp(ref_per_token_logps - per_token_logps, min=-20.0, max=20.0)
+    per_token_kl = torch.exp(kl_delta) - kl_delta - 1.0
 
     sequence_token_count = mask.sum(dim=1).clamp_min(1.0)
     policy_loss = ((per_token_policy_loss * mask).sum(dim=1) / sequence_token_count).mean()
@@ -83,6 +80,7 @@ def encoder_decoder_per_token_logps(
     src_mask: Tensor,
     generated_ids: Tensor,
     temperature: float,
+    top_p: float,
 ) -> tuple[Tensor, Tensor]:
     decoder_input = generated_ids[:, :-1]
     targets = generated_ids[:, 1:]
@@ -103,6 +101,7 @@ def decoder_only_per_token_logps(
     type_ids: Tensor,
     generated_ids: Tensor,
     temperature: float,
+    top_p: float,
 ) -> tuple[Tensor, Tensor]:
     batch_size, generated_length = generated_ids.shape
     prompt_lengths = attention_mask.long().sum(dim=1).clamp_min(1)
@@ -155,6 +154,7 @@ def compute_encoder_decoder_grpo_loss(
     num_generations: int,
     max_length: int,
     temperature: float,
+    top_p: float,
     advantage_eps: float,
     clip_eps: float,
     kl_beta: float,
@@ -180,6 +180,7 @@ def compute_encoder_decoder_grpo_loss(
             src_mask,
             max_length,
             temperature=temperature,
+            top_p=top_p,
         )
         old_per_token_logps, mask = encoder_decoder_per_token_logps(
             old_policy,
@@ -187,6 +188,7 @@ def compute_encoder_decoder_grpo_loss(
             src_mask,
             generated_ids,
             temperature,
+            top_p,
         )
         ref_per_token_logps, _ = encoder_decoder_per_token_logps(
             reference_policy,
@@ -194,6 +196,7 @@ def compute_encoder_decoder_grpo_loss(
             src_mask,
             generated_ids,
             temperature,
+            top_p,
         )
 
     predictions = tgt_tokenizer.decode_batch(generated_ids.cpu().tolist())
@@ -212,6 +215,7 @@ def compute_encoder_decoder_grpo_loss(
         src_mask,
         generated_ids,
         temperature,
+        top_p,
     )
 
     grpo_loss_value, metrics = grpo_loss(
@@ -255,6 +259,7 @@ def compute_decoder_only_grpo_loss(
     num_generations: int,
     max_length: int,
     temperature: float,
+    top_p: float,
     advantage_eps: float,
     clip_eps: float,
     kl_beta: float,
@@ -283,6 +288,7 @@ def compute_decoder_only_grpo_loss(
             type_ids,
             max_length,
             temperature=temperature,
+            top_p=top_p,
         )
         old_per_token_logps, mask = decoder_only_per_token_logps(
             old_policy,
@@ -291,6 +297,7 @@ def compute_decoder_only_grpo_loss(
             type_ids,
             generated_ids,
             temperature,
+            top_p,
         )
         ref_per_token_logps, _ = decoder_only_per_token_logps(
             reference_policy,
@@ -299,6 +306,7 @@ def compute_decoder_only_grpo_loss(
             type_ids,
             generated_ids,
             temperature,
+            top_p,
         )
 
     predictions = tokenizer.decode_batch(generated_ids.cpu().tolist())
@@ -318,6 +326,7 @@ def compute_decoder_only_grpo_loss(
         type_ids,
         generated_ids,
         temperature,
+        top_p,
     )
 
     grpo_loss_value, metrics = grpo_loss(
@@ -331,7 +340,7 @@ def compute_decoder_only_grpo_loss(
     )
 
     if sft_mu > 0.0:
-        sft_loss, _ = compute_bilingual_loss(model, batch, device=device)
+        sft_loss, _ = compute_decoder_loss(model, batch, device=device)
         loss = (1 - sft_mu) * grpo_loss_value + sft_mu * sft_loss
     else:
         sft_loss = grpo_loss_value.detach().new_zeros(())

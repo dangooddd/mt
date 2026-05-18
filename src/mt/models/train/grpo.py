@@ -16,15 +16,15 @@ from mt.tokenizers import BaseTokenizer
 from ..load import load_from_config
 from .utils.grpo import compute_decoder_only_grpo_loss, compute_encoder_decoder_grpo_loss
 from .utils.pretrain import (
-    BilingualEvalCollateFn,
+    DecoderEvalCollateFn,
     EvalCollateFn,
     attach_tensorboard_logging,
-    compute_bilingual_loss,
-    compute_bilingual_predictions,
+    compute_decoder_loss,
+    compute_decoder_predictions,
     compute_predictions,
     create_evaluator,
     create_trainer,
-    decay_params,
+    split_decay_params,
 )
 from .utils.pretrain import (
     compute_loss as compute_pretrain_loss,
@@ -47,13 +47,16 @@ def main() -> None:
     parser.add_argument("--tgt", type=str, default="en")
     parser.add_argument("--lr", type=float, default=2e-6)
     parser.add_argument("--weight-decay", type=float, default=0.01)
+    parser.add_argument("--adam-beta1", type=float, default=0.9)
+    parser.add_argument("--adam-beta2", type=float, default=0.999)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--batch-size", type=int, default=25)
-    parser.add_argument("--epoch-steps", type=int, default=100)
-    parser.add_argument("--steps", type=int, default=80000)
+    parser.add_argument("--epoch-steps", type=int, default=250)
+    parser.add_argument("--steps", type=int, default=216000)
     parser.add_argument("--max-length", type=int, default=192)
-    parser.add_argument("--num-generations", type=int, default=8)
+    parser.add_argument("--num-generations", type=int, default=6)
     parser.add_argument("--temperature", type=float, default=0.7)
+    parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--reward", choices=["chrf", "bleu", "comet"], default="chrf")
     parser.add_argument("--comet-model-name", type=str, default="Unbabel/wmt22-comet-da")
     parser.add_argument("--comet-batch-size", type=int, default=100)
@@ -87,13 +90,14 @@ def main() -> None:
     reference_policy.requires_grad_(False)
     reference_policy.eval()
 
-    decay, no_decay = decay_params(model)
+    decay, no_decay = split_decay_params(model)
     optimizer = optim.AdamW(
         [
             {"params": decay, "weight_decay": args.weight_decay},
             {"params": no_decay, "weight_decay": 0.0},
         ],
         lr=args.lr,
+        betas=(args.adam_beta1, args.adam_beta2),
     )
 
     scheduler = optim.lr_scheduler.ConstantLR(
@@ -129,6 +133,7 @@ def main() -> None:
             "num_generations": args.num_generations,
             "max_length": args.max_length,
             "temperature": args.temperature,
+            "top_p": args.top_p,
             "advantage_eps": args.advantage_eps,
             "clip_eps": args.clip_eps,
             "kl_beta": args.kl_beta,
@@ -144,13 +149,13 @@ def main() -> None:
 
     else:
         tokenizer = tokenizers
-        train_collate_fn = BilingualEvalCollateFn(
+        train_collate_fn = DecoderEvalCollateFn(
             tokenizer=tokenizer,
             max_length=args.max_length,
             src_column=args.src,
             tgt_column=args.tgt,
         )
-        evaluation_collate_fn = BilingualEvalCollateFn(
+        evaluation_collate_fn = DecoderEvalCollateFn(
             tokenizer=tokenizer,
             max_length=args.max_length,
             src_column=args.src,
@@ -165,14 +170,15 @@ def main() -> None:
             "num_generations": args.num_generations,
             "max_length": args.max_length,
             "temperature": args.temperature,
+            "top_p": args.top_p,
             "advantage_eps": args.advantage_eps,
             "clip_eps": args.clip_eps,
             "kl_beta": args.kl_beta,
             "sft_mu": args.sft_mu,
         }
-        evaluation_loss_fn = compute_bilingual_loss
+        evaluation_loss_fn = compute_decoder_loss
         evaluation_loss_kwargs = {}
-        predictions_fn = compute_bilingual_predictions
+        predictions_fn = compute_decoder_predictions
         predictions_kwargs = {
             "tokenizer": tokenizer,
             "max_length": args.max_length,

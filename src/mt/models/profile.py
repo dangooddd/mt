@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, Dataset
 from mt.tokenizers import BaseTokenizer
 
 from .load import load_from_config
-from .train import BilingualCollateFn, CollateFn
+from .train.utils.pretrain import CollateFn, DecoderCollateFn
 
 
 def main() -> None:
@@ -49,15 +49,15 @@ def main() -> None:
             max_src_length=max_length,
             max_tgt_length=max_length,
         )
-        bilingual = False
+        decoder = False
     else:
-        collate_fn = BilingualCollateFn(
+        collate_fn = DecoderCollateFn(
             tokenizer=tokenizers,
             src_column=args.src,
             tgt_column=args.tgt,
             max_length=max_length,
         )
-        bilingual = True
+        decoder = True
 
     dataset = load_from_disk(args.dataset_path)
     data = dataset[args.split] if isinstance(dataset, DatasetDict) else dataset
@@ -88,7 +88,7 @@ def main() -> None:
             ),
         ):
             with record_function("model_forward"):
-                if bilingual:
+                if decoder:
                     input_ids = batch["input_ids"].to(device=device)
                     attention_mask = batch["attention_mask"].to(device=device)
                     type_ids = batch["type_ids"].to(device=device)

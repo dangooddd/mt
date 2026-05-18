@@ -17,9 +17,9 @@ from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer
 from .load import load_from_config
 from .modules import DecoderOnly, EncoderDecoder
 from .train.utils.pretrain import (
-    BilingualEvalCollateFn,
+    DecoderEvalCollateFn,
     EvalCollateFn,
-    compute_bilingual_predictions,
+    compute_decoder_predictions,
     compute_predictions,
 )
 
@@ -27,17 +27,6 @@ BATCH_SIZE = 64
 SCORE_BATCH_SIZE = 100
 SCORE_MAP_BATCH_SIZE = 50000
 SCORE_MODEL_NAME = "Unbabel/wmt22-comet-da"
-
-
-def load_split(dataset_path: str, split: str) -> Dataset:
-    dataset = load_from_disk(dataset_path)
-
-    if isinstance(dataset, DatasetDict):
-        if split not in dataset:
-            raise ValueError(f"Split '{split}' not found. Available splits: {list(dataset.keys())}")
-        return dataset[split]
-
-    return dataset
 
 
 @torch.inference_mode()
@@ -51,6 +40,8 @@ def generate_predictions(
     device: torch.device,
     src_column: str,
     tgt_column: str,
+    temperature: float = 0.0,
+    top_p: float = 1.0,
 ) -> list[str]:
     collate_fn = EvalCollateFn(
         src_tokenizer=src_tokenizer,
@@ -82,6 +73,8 @@ def generate_predictions(
                 device=device,
                 tgt_tokenizer=tgt_tokenizer,
                 max_length=max_length,
+                temperature=temperature,
+                top_p=top_p,
             )
 
         predictions.extend(batch_predictions)
@@ -90,7 +83,7 @@ def generate_predictions(
 
 
 @torch.inference_mode()
-def generate_bilingual_predictions(
+def generate_decoder_predictions(
     dataset: Dataset,
     model: DecoderOnly,
     tokenizer: BilingualBaseTokenizer,
@@ -99,8 +92,10 @@ def generate_bilingual_predictions(
     device: torch.device,
     src_column: str,
     tgt_column: str,
+    temperature: float = 0.0,
+    top_p: float = 1.0,
 ) -> list[str]:
-    collate_fn = BilingualEvalCollateFn(
+    collate_fn = DecoderEvalCollateFn(
         tokenizer=tokenizer,
         src_column=src_column,
         tgt_column=tgt_column,
@@ -123,12 +118,14 @@ def generate_bilingual_predictions(
 
     for batch in tqdm(loader, desc="Inference"):
         with torch.autocast(device_type=device.type, enabled=amp_enabled, dtype=torch.bfloat16):
-            batch_predictions, _ = compute_bilingual_predictions(
+            batch_predictions, _ = compute_decoder_predictions(
                 model=model,
                 batch=batch,
                 device=device,
                 tokenizer=tokenizer,
                 max_length=max_length,
+                temperature=temperature,
+                top_p=top_p,
             )
 
         predictions.extend(batch_predictions)
@@ -185,10 +182,14 @@ def main() -> None:
     parser.add_argument("--src", type=str, default="ru")
     parser.add_argument("--tgt", type=str, default="en")
     parser.add_argument("--pred", type=str, default="prediction")
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--top-p", type=float, default=1.0)
     args = parser.parse_args()
     transformers.logging.set_verbosity_error()
 
-    dataset = load_split(args.dataset_path, args.split)
+    dataset_dict = load_from_disk(args.dataset_path)
+    assert isinstance(dataset_dict, DatasetDict)
+    dataset = dataset_dict[args.split]
     model, tokenizers, config = load_from_config(args.model_dir, load_weights=True)
 
     max_length = int(config.get("max_length", 256))
@@ -207,10 +208,12 @@ def main() -> None:
             device=device,
             src_column=args.src,
             tgt_column=args.tgt,
+            temperature=args.temperature,
+            top_p=args.top_p,
         )
     else:
         model = cast(DecoderOnly, model)
-        predictions = generate_bilingual_predictions(
+        predictions = generate_decoder_predictions(
             dataset=dataset,
             model=model,
             tokenizer=tokenizers,
@@ -219,6 +222,8 @@ def main() -> None:
             device=device,
             src_column=args.src,
             tgt_column=args.tgt,
+            temperature=args.temperature,
+            top_p=args.top_p,
         )
 
     dataset = dataset.add_column(args.pred, predictions)
