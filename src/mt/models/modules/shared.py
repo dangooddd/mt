@@ -10,7 +10,7 @@ class RMSNorm(nn.RMSNorm):
     def forward(self, x: Tensor):
         dtype = x.dtype
         with torch.autocast(x.device.type, enabled=False):
-            return super().forward(x.float()).to(dtype)
+            return super().forward(x.to(dtype=self.weight.dtype)).to(dtype)
 
 
 class FFN(nn.Module):

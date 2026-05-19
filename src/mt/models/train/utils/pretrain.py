@@ -19,8 +19,8 @@ from torch.types import Device
 
 from mt.dataset.score import suppress_output
 from mt.models.load import Model
-from mt.models.modules import DecoderOnly, EncoderDecoder
-from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer
+from mt.models.modules import DecoderOnly, EncoderDecoder, EncoderDecoderBilingual
+from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer, DecoderBaseTokenizer
 
 COMET_MODEL_NAME = "Unbabel/wmt22-comet-da"
 COMET_BATCH_SIZE = 100
@@ -120,10 +120,90 @@ class EvalCollateFn:
         }
 
 
-class DecoderCollateFn:
+class BilingualCollateFn:
     def __init__(
         self,
         tokenizer: BilingualBaseTokenizer,
+        src_column: str = "ru",
+        tgt_column: str = "en",
+        max_length: int | None = None,
+    ):
+        self.tokenizer = tokenizer
+        self.src_column = src_column
+        self.tgt_column = tgt_column
+        self.tokenizer.enable_padding(direction="right")
+
+        if max_length is not None:
+            self.tokenizer.enable_truncation(max_length, direction="right")
+        else:
+            self.tokenizer.no_truncation()
+
+    def __call__(self, batch: list[dict[str, str]]):
+        src_texts = [item[self.src_column] for item in batch]
+        tgt_texts = [item[self.tgt_column] for item in batch]
+
+        src_encodings = self.tokenizer.encode_batch(
+            src_texts + tgt_texts,
+            target_tokens=[f"<2{self.tgt_column}>"] * len(src_texts)
+            + [f"<2{self.src_column}>"] * len(tgt_texts),
+        )
+        tgt_encodings = self.tokenizer.encode_batch(tgt_texts + src_texts)
+
+        src_ids = [encoding.ids for encoding in src_encodings]
+        tgt_ids = [encoding.ids for encoding in tgt_encodings]
+        src_mask = [encoding.attention_mask for encoding in src_encodings]
+
+        return {
+            "src_mask": torch.tensor(src_mask, dtype=torch.bool),
+            "src_ids": torch.tensor(src_ids, dtype=torch.long),
+            "tgt_ids": torch.tensor(tgt_ids, dtype=torch.long),
+        }
+
+
+class BilingualEvalCollateFn:
+    def __init__(
+        self,
+        tokenizer: BilingualBaseTokenizer,
+        src_column: str = "ru",
+        tgt_column: str = "en",
+        max_length: int | None = None,
+    ):
+        self.tokenizer = tokenizer
+        self.src_column = src_column
+        self.tgt_column = tgt_column
+        self.tokenizer.enable_padding(direction="right")
+
+        if max_length is not None:
+            self.tokenizer.enable_truncation(max_length, direction="right")
+        else:
+            self.tokenizer.no_truncation()
+
+    def __call__(self, batch: list[dict[str, str]]):
+        src_texts = [item[self.src_column] for item in batch]
+        targets = [item[self.tgt_column] for item in batch]
+
+        src_encodings = self.tokenizer.encode_batch(
+            src_texts, target_tokens=f"<2{self.tgt_column}>"
+        )
+        tgt_encodings = self.tokenizer.encode_batch(targets)
+
+        src_ids = [encoding.ids for encoding in src_encodings]
+        tgt_ids = [encoding.ids for encoding in tgt_encodings]
+        src_mask = [encoding.attention_mask for encoding in src_encodings]
+
+        return {
+            "src_mask": torch.tensor(src_mask, dtype=torch.bool),
+            "src_ids": torch.tensor(src_ids, dtype=torch.long),
+            "tgt_ids": torch.tensor(tgt_ids, dtype=torch.long),
+            "sources": src_texts,
+            "targets": targets,
+        }
+
+
+class DecoderCollateFn:
+    def __init__(
+        self,
+        tokenizer: DecoderBaseTokenizer,
         src_column: str = "ru",
         tgt_column: str = "en",
         max_length: int | None = None,
@@ -177,7 +257,7 @@ class DecoderCollateFn:
 class DecoderEvalCollateFn:
     def __init__(
         self,
-        tokenizer: BilingualBaseTokenizer,
+        tokenizer: DecoderBaseTokenizer,
         src_column: str = "ru",
         tgt_column: str = "en",
         max_length: int | None = None,
@@ -311,6 +391,33 @@ def compute_loss(
     return loss, {}
 
 
+def compute_bilingual_loss(
+    model: EncoderDecoderBilingual,
+    batch: dict[str, Any],
+    device: Device,
+    label_smoothing: float = 0.0,
+) -> tuple[Tensor, dict[str, Any]]:
+    src_ids = batch["src_ids"].to(device=device)
+    tgt_ids = batch["tgt_ids"].to(device=device)
+    src_mask = batch["src_mask"].to(device=device)
+
+    logits = model.forward(
+        src_ids,
+        tgt_ids[:, :-1],
+        src_mask,
+    )
+
+    targets = tgt_ids[:, 1:]
+    loss = F.cross_entropy(
+        logits.reshape(-1, logits.size(-1)),
+        targets.reshape(-1),
+        ignore_index=model.pad_token_id,
+        label_smoothing=label_smoothing,
+    )
+
+    return loss, {}
+
+
 def compute_decoder_loss(
     model: DecoderOnly,
     batch: dict[str, Any],
@@ -367,7 +474,7 @@ def compute_decoder_predictions(
     model: DecoderOnly,
     batch: dict[str, Any],
     device: Device,
-    tokenizer: BilingualBaseTokenizer,
+    tokenizer: DecoderBaseTokenizer,
     max_length: int = 1024,
     temperature: float = 0.0,
     top_p: float = 1.0,

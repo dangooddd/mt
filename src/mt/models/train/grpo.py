@@ -10,15 +10,17 @@ from ignite.engine import Events
 from ignite.handlers import Checkpoint, DiskSaver, global_step_from_engine
 from torch.utils.data import DataLoader, Dataset
 
-from mt.models.modules import DecoderOnly, EncoderDecoder
-from mt.tokenizers import BaseTokenizer
+from mt.models.modules import DecoderOnly, EncoderDecoder, EncoderDecoderBilingual
+from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer, DecoderBaseTokenizer
 
 from ..load import load_from_config
 from .utils.grpo import compute_decoder_only_grpo_loss, compute_encoder_decoder_grpo_loss
 from .utils.pretrain import (
+    BilingualEvalCollateFn,
     DecoderEvalCollateFn,
     EvalCollateFn,
     attach_tensorboard_logging,
+    compute_bilingual_loss,
     compute_decoder_loss,
     compute_decoder_predictions,
     compute_predictions,
@@ -26,9 +28,7 @@ from .utils.pretrain import (
     create_trainer,
     split_decay_params,
 )
-from .utils.pretrain import (
-    compute_loss as compute_pretrain_loss,
-)
+from .utils.pretrain import compute_loss as compute_pretrain_loss
 from .utils.rewards import create_reward_scorer
 
 
@@ -106,21 +106,56 @@ def main() -> None:
         total_iters=args.steps,
     )
 
-    if isinstance(tokenizers, tuple):
+    if isinstance(model, EncoderDecoderBilingual):
+        tokenizer = cast(BilingualBaseTokenizer, tokenizers)
+        train_collate_fn = BilingualEvalCollateFn(
+            tokenizer=tokenizer,
+            max_length=args.max_length,
+            src_column=args.src,
+            tgt_column=args.tgt,
+        )
+        evaluation_collate_fn = BilingualEvalCollateFn(
+            tokenizer=tokenizer,
+            max_length=args.max_length,
+            src_column=args.src,
+            tgt_column=args.tgt,
+        )
+        train_loss_fn = compute_encoder_decoder_grpo_loss
+        train_loss_kwargs = {
+            "old_policy": cast(EncoderDecoderBilingual, old_policy),
+            "reference_policy": cast(EncoderDecoderBilingual, reference_policy),
+            "tgt_tokenizer": tokenizer,
+            "reward_scorer": reward_scorer,
+            "num_generations": args.num_generations,
+            "max_length": args.max_length,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "advantage_eps": args.advantage_eps,
+            "clip_eps": args.clip_eps,
+            "kl_beta": args.kl_beta,
+            "sft_mu": args.sft_mu,
+        }
+        evaluation_loss_fn = compute_bilingual_loss
+        evaluation_loss_kwargs = {}
+        predictions_fn = compute_predictions
+        predictions_kwargs = {
+            "tgt_tokenizer": tokenizer,
+            "max_length": args.max_length,
+        }
+
+    elif isinstance(model, EncoderDecoder):
         src_tokenizer, tgt_tokenizer = cast(tuple[BaseTokenizer, BaseTokenizer], tokenizers)
         train_collate_fn = EvalCollateFn(
             src_tokenizer=src_tokenizer,
             tgt_tokenizer=tgt_tokenizer,
-            max_src_length=args.max_length,
-            max_tgt_length=args.max_length,
+            max_length=args.max_length,
             src_column=args.src,
             tgt_column=args.tgt,
         )
         evaluation_collate_fn = EvalCollateFn(
             src_tokenizer=src_tokenizer,
             tgt_tokenizer=tgt_tokenizer,
-            max_src_length=args.max_length,
-            max_tgt_length=args.max_length,
+            max_length=args.max_length,
             src_column=args.src,
             tgt_column=args.tgt,
         )
@@ -147,8 +182,8 @@ def main() -> None:
             "max_length": args.max_length,
         }
 
-    else:
-        tokenizer = tokenizers
+    elif isinstance(model, DecoderOnly):
+        tokenizer = cast(DecoderBaseTokenizer, tokenizers)
         train_collate_fn = DecoderEvalCollateFn(
             tokenizer=tokenizer,
             max_length=args.max_length,
@@ -183,6 +218,9 @@ def main() -> None:
             "tokenizer": tokenizer,
             "max_length": args.max_length,
         }
+
+    else:
+        raise TypeError(f"Unsupported model type: {type(model)}")
 
     train_loader = DataLoader(
         cast(Dataset, dataset[args.train_split]),

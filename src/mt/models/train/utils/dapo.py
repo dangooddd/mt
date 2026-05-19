@@ -3,11 +3,11 @@ from typing import Any, cast
 import torch
 from torch import Tensor
 
-from mt.models.modules import DecoderOnly, EncoderDecoder
-from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer
+from mt.models.modules import DecoderOnly, EncoderDecoder, EncoderDecoderBilingual
+from mt.tokenizers import BaseTokenizer, DecoderBaseTokenizer
 
 from .pretrain import compute_decoder_loss
-from .pretrain import compute_loss as compute_pretrain_loss
+from .pretrain import compute_bilingual_loss, compute_loss as compute_pretrain_loss
 from .rewards import RewardScorer
 
 
@@ -90,7 +90,8 @@ def encoder_decoder_per_token_logps(
         logits = logits / temperature
     logps = logits.log_softmax(dim=-1)
     per_token_logps = logps.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
-    mask = completion_mask(targets, model.tgt_eos_token_id)
+    eos_token_id = model.eos_token_id if isinstance(model, EncoderDecoderBilingual) else model.tgt_eos_token_id
+    mask = completion_mask(targets, eos_token_id)
     return per_token_logps, mask
 
 
@@ -231,7 +232,10 @@ def compute_encoder_decoder_dapo_loss(
     )
 
     if sft_mu > 0.0:
-        sft_loss, _ = compute_pretrain_loss(model, batch, device=device)
+        if isinstance(model, EncoderDecoderBilingual):
+            sft_loss, _ = compute_bilingual_loss(model, batch, device=device)
+        else:
+            sft_loss, _ = compute_pretrain_loss(model, batch, device=device)
         loss = (1 - sft_mu) * dapo_loss_value + sft_mu * sft_loss
     else:
         sft_loss = dapo_loss_value.detach().new_zeros(())
@@ -256,7 +260,7 @@ def compute_decoder_only_dapo_loss(
     device: torch.device,
     old_policy: DecoderOnly,
     reference_policy: DecoderOnly,
-    tokenizer: BilingualBaseTokenizer,
+    tokenizer: DecoderBaseTokenizer,
     reward_scorer: RewardScorer,
     num_generations: int,
     max_length: int,

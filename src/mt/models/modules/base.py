@@ -87,6 +87,39 @@ class EncoderDecoder(TemperatureGenerationMixin, ABC, nn.Module):
     ): ...
 
 
+class EncoderDecoderBilingual(TemperatureGenerationMixin, ABC, nn.Module):
+    def __init__(
+        self,
+        vocab_size: int,
+        pad_token_id: int,
+        bos_token_id: int,
+        eos_token_id: int,
+    ):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.pad_token_id = pad_token_id
+        self.bos_token_id = bos_token_id
+        self.eos_token_id = eos_token_id
+
+    @abstractmethod
+    def forward(
+        self,
+        input_ids: Tensor,
+        output_ids: Tensor,
+        attention_mask: Tensor,
+    ): ...
+
+    @abstractmethod
+    def inference(
+        self,
+        input_ids: Tensor,
+        attention_mask: Tensor,
+        max_length: int,
+        temperature: float = 0.0,
+        top_p: float = 1.0,
+    ): ...
+
+
 class DecoderOnly(TemperatureGenerationMixin, ABC, nn.Module):
     def __init__(
         self,

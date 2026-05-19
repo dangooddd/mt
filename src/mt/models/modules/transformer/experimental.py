@@ -4,7 +4,7 @@ from flash_attn import flash_attn_func, flash_attn_varlen_func, flash_attn_varle
 from flash_attn.bert_padding import pad_input, unpad_input
 from torch import Tensor
 
-from ..base import EncoderDecoder
+from ..base import EncoderDecoder, EncoderDecoderBilingual
 from ..shared import FFN, RMSNorm
 
 
@@ -202,6 +202,116 @@ class TransformerDecoder(nn.Module):
         x = x + self.cross_attn(x, y, mask)
         x = x + self.ffn(x)
         return x
+
+
+class ExperimentalTransformerBilingualSeq2Seq(EncoderDecoderBilingual):
+    def __init__(
+        self,
+        vocab_size: int,
+        pad_token_id: int,
+        bos_token_id: int,
+        eos_token_id: int,
+        encoder_layers: int = 2,
+        decoder_layers: int = 2,
+        d_model: int = 256,
+        num_heads: int = 8,
+        dropout: float = 0.2,
+        inner_multiplier: int = 2,
+        theta: float = 10000.0,
+    ):
+        super().__init__(
+            vocab_size=vocab_size,
+            pad_token_id=pad_token_id,
+            bos_token_id=bos_token_id,
+            eos_token_id=eos_token_id,
+        )
+
+        self.embedding = nn.Embedding(vocab_size, d_model, pad_token_id)
+        self.norm = RMSNorm(d_model)
+        self.head = nn.Linear(d_model, vocab_size)
+
+        self.encoder = nn.ModuleList(
+            [
+                Transformer(
+                    d_model=d_model,
+                    num_heads=num_heads,
+                    dropout=dropout,
+                    inner_multiplier=inner_multiplier,
+                    theta=theta,
+                )
+                for _ in range(encoder_layers)
+            ]
+        )
+
+        self.decoder = nn.ModuleList(
+            [
+                TransformerDecoder(
+                    d_model=d_model,
+                    num_heads=num_heads,
+                    dropout=dropout,
+                    inner_multiplier=inner_multiplier,
+                    theta=theta,
+                )
+                for _ in range(decoder_layers)
+            ]
+        )
+
+    def encode(self, input_ids: Tensor, key_padding_mask: Tensor) -> Tensor:
+        y = self.embedding(input_ids)
+        for layer in self.encoder:
+            y = layer(y, key_padding_mask)
+        return y
+
+    def decode(
+        self, output_ids: Tensor, encoder_outputs: Tensor, key_padding_mask: Tensor
+    ) -> Tensor:
+        x = self.embedding(output_ids)
+        for layer in self.decoder:
+            x = layer(x, encoder_outputs, key_padding_mask)
+        x = self.head(self.norm(x))
+        return x
+
+    def forward(self, input_ids: Tensor, output_ids: Tensor, attention_mask: Tensor) -> Tensor:
+        key_padding_mask = ~attention_mask.bool()
+        encoder_outputs = self.encode(input_ids, key_padding_mask)
+        return self.decode(output_ids, encoder_outputs, key_padding_mask)
+
+    @torch.no_grad()
+    def inference(
+        self,
+        input_ids: Tensor,
+        attention_mask: Tensor,
+        max_length: int = 128,
+        temperature: float = 0.0,
+        top_p: float = 1.0,
+    ) -> Tensor:
+        batch_size = input_ids.size(0)
+        device = input_ids.device
+        key_padding_mask = ~attention_mask.bool()
+        encoder_outputs = self.encode(input_ids, key_padding_mask)
+
+        sequences = torch.full(
+            (batch_size, max_length),
+            self.pad_token_id,
+            dtype=torch.long,
+            device=device,
+        )
+
+        sequences[:, 0] = self.bos_token_id
+        finished = torch.zeros(batch_size, dtype=torch.bool, device=device)
+
+        for t in range(1, max_length):
+            logits_t = self.decode(sequences[:, :t], encoder_outputs, key_padding_mask)[:, -1, :]
+            next_token = self._sample_next_token(logits_t, temperature, top_p)
+
+            active = ~finished
+            sequences[active, t] = next_token[active]
+            finished |= next_token == self.eos_token_id
+
+            if finished.all():
+                break
+
+        return sequences
 
 
 class ExperimentalTransformerSeq2Seq(EncoderDecoder):

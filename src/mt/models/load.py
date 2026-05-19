@@ -4,10 +4,17 @@ from typing import Any
 
 import torch
 
-from ..tokenizers import TOKENIZER_CLASSES, BaseTokenizer, BilingualBaseTokenizer
+from ..tokenizers import (
+    TOKENIZER_CLASSES,
+    BaseTokenizer,
+    BilingualBaseTokenizer,
+    DecoderBaseTokenizer,
+)
 from .modules import (
     DecoderOnly,
     EncoderDecoder,
+    EncoderDecoderBilingual,
+    ExperimentalTransformerBilingualSeq2Seq,
     ExperimentalTransformerSeq2Seq,
     LstmSeq2Seq,
     LuongSeq2Seq,
@@ -21,10 +28,16 @@ from .modules import (
     TransformerSeq2Seq,
 )
 
-Tokenizer = tuple[BaseTokenizer, BaseTokenizer] | BilingualBaseTokenizer
-Model = EncoderDecoder | DecoderOnly
+Tokenizer = tuple[BaseTokenizer, BaseTokenizer] | BilingualBaseTokenizer | DecoderBaseTokenizer
+Model = EncoderDecoder | EncoderDecoderBilingual | DecoderOnly
 
-MODEL_CLASSES: dict[str, Model] = {
+DTYPES: dict[str, torch.dtype] = {
+    "float32": torch.float32,
+    "bfloat16": torch.bfloat16,
+    "float16": torch.float16,
+}
+
+MODEL_CLASSES: dict[str, type[Model]] = {
     "lstm": LstmSeq2Seq,
     "luong": LuongSeq2Seq,
     "mamba": MambaSeq2Seq,
@@ -35,6 +48,7 @@ MODEL_CLASSES: dict[str, Model] = {
     "ssm": S4Seq2Seq,
     "transformer": TransformerSeq2Seq,
     "transformer-experimental": ExperimentalTransformerSeq2Seq,
+    "transformer-bilingual": ExperimentalTransformerBilingualSeq2Seq,
     "transformer-decoder": TransformerDecoder,
 }
 
@@ -52,6 +66,7 @@ def load_from_config(
     config = json.loads(config_path.read_text())
     supported_models = list(MODEL_CLASSES.keys())
     supported_tokenizers = list(TOKENIZER_CLASSES.keys())
+    supported_dtypes = list(DTYPES.keys())
 
     model_type = config.get("model")
 
@@ -71,15 +86,15 @@ def load_from_config(
             raise ValueError(f"Unknown tokenizer. Supported: {supported_tokenizers}")
 
         tokenizer = TOKENIZER_CLASSES[tokenizer_type].from_file(tokenizer_path)
-        assert isinstance(tokenizer, BilingualBaseTokenizer)
-
-        if not isinstance(tokenizer, BilingualBaseTokenizer):
-            raise ValueError("The 'tokenizer' config field requires a bilingual tokenizer")
-
-        model_args["vocab_size"] = tokenizer.get_vocab_size()
-        model_args["pad_token_id"] = tokenizer.pad_token_id
-        model_args["bos_token_id"] = tokenizer.bos_token_id
-        model_args["eos_token_id"] = tokenizer.eos_token_id
+        if isinstance(tokenizer, BilingualBaseTokenizer) or isinstance(
+            tokenizer, DecoderBaseTokenizer
+        ):
+            model_args["vocab_size"] = tokenizer.get_vocab_size()
+            model_args["pad_token_id"] = tokenizer.pad_token_id
+            model_args["bos_token_id"] = tokenizer.bos_token_id
+            model_args["eos_token_id"] = tokenizer.eos_token_id
+        else:
+            raise ValueError("The 'tokenizer' should be a bilingual or decoder tokenizer")
         tokenizers = tokenizer
 
     else:
@@ -112,6 +127,12 @@ def load_from_config(
         tokenizers = (src_tokenizer, tgt_tokenizer)
 
     model = MODEL_CLASSES[model_type](**model_args)
+
+    dtype_name = config.get("dtype")
+    if dtype_name is not None:
+        if dtype_name not in DTYPES:
+            raise ValueError(f"Unknown dtype. Supported: {supported_dtypes}")
+        model.to(dtype=DTYPES[dtype_name])
 
     if load_weights:
         model_path = model_dir / "model.pt"

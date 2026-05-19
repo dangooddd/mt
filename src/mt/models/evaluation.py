@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 from tqdm import tqdm
 
-from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer
+from mt.tokenizers import BaseTokenizer, DecoderBaseTokenizer
 
 from .load import load_from_config
 from .modules import DecoderOnly, EncoderDecoder
@@ -86,7 +86,7 @@ def generate_predictions(
 def generate_decoder_predictions(
     dataset: Dataset,
     model: DecoderOnly,
-    tokenizer: BilingualBaseTokenizer,
+    tokenizer: DecoderBaseTokenizer,
     batch_size: int,
     max_length: int,
     device: torch.device,

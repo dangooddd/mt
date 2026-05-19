@@ -69,6 +69,8 @@ class BaseTokenizer:
         vocab_size: int = 32000,
         show_progress: bool = True,
     ) -> Trainer:
+        _ = vocab_size
+        _ = show_progress
         raise NotImplementedError
 
     def encode(
