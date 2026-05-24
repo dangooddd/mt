@@ -1,9 +1,11 @@
 from .classic import TransformerSeq2Seq
+from .complete import CompleteTransformerSeq2Seq
 from .decoder import TransformerDecoder
 from .experimental import ExperimentalTransformerBilingualSeq2Seq, ExperimentalTransformerSeq2Seq
 
 __all__ = [
     "TransformerSeq2Seq",
+    "CompleteTransformerSeq2Seq",
     "TransformerDecoder",
     "ExperimentalTransformerSeq2Seq",
     "ExperimentalTransformerBilingualSeq2Seq",

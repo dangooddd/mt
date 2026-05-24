@@ -141,13 +141,15 @@ class BilingualCollateFn:
     def __call__(self, batch: list[dict[str, str]]):
         src_texts = [item[self.src_column] for item in batch]
         tgt_texts = [item[self.tgt_column] for item in batch]
+        sources = src_texts + tgt_texts
+        targets = tgt_texts + src_texts
 
         src_encodings = self.tokenizer.encode_batch(
-            src_texts + tgt_texts,
+            sources,
             target_tokens=[f"<2{self.tgt_column}>"] * len(src_texts)
             + [f"<2{self.src_column}>"] * len(tgt_texts),
         )
-        tgt_encodings = self.tokenizer.encode_batch(tgt_texts + src_texts)
+        tgt_encodings = self.tokenizer.encode_batch(targets)
 
         src_ids = [encoding.ids for encoding in src_encodings]
         tgt_ids = [encoding.ids for encoding in tgt_encodings]
@@ -157,6 +159,8 @@ class BilingualCollateFn:
             "src_mask": torch.tensor(src_mask, dtype=torch.bool),
             "src_ids": torch.tensor(src_ids, dtype=torch.long),
             "tgt_ids": torch.tensor(tgt_ids, dtype=torch.long),
+            "sources": sources,
+            "targets": targets,
         }
 
 
@@ -506,9 +510,10 @@ def create_trainer(
     compute_loss: Callable[..., tuple[Tensor, dict[str, Any]]],
     compute_loss_kwargs: dict,
     max_grad_norm: float = 1.0,
+    amp: bool = True,
 ) -> Engine:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    use_amp = device.type == "cuda"
+    use_amp = amp and device.type == "cuda"
     model.to(device)
 
     def train_step(engine: Engine, batch: dict[str, Tensor]) -> dict[str, Any]:
@@ -548,9 +553,10 @@ def create_evaluator(
     compute_loss_kwargs: dict,
     compute_predictions: Callable[..., tuple[list[str], list[str]]],
     compute_predictions_kwargs: dict,
+    amp: bool = True,
 ) -> Engine:
     device = next(model.parameters()).device
-    use_amp = device.type == "cuda"
+    use_amp = amp and device.type == "cuda"
     bleu = BLEU()
     chrf = CHRF()
 

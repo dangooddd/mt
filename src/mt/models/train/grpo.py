@@ -57,7 +57,7 @@ def main() -> None:
     parser.add_argument("--num-generations", type=int, default=6)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=0.95)
-    parser.add_argument("--reward", choices=["chrf", "bleu", "comet"], default="chrf")
+    parser.add_argument("--reward", choices=["chrf", "bleu", "comet", "mixed"], default="chrf")
     parser.add_argument("--comet-model-name", type=str, default="Unbabel/wmt22-comet-da")
     parser.add_argument("--comet-batch-size", type=int, default=100)
     parser.add_argument("--advantage-eps", type=float, default=1e-6)

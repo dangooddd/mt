@@ -1,5 +1,5 @@
 import csv
-from argparse import ArgumentParser
+from argparse import ArgumentParser, BooleanOptionalAction
 from pathlib import Path
 from typing import cast
 
@@ -42,6 +42,7 @@ def generate_predictions(
     tgt_column: str,
     temperature: float = 0.0,
     top_p: float = 1.0,
+    amp: bool = True,
 ) -> list[str]:
     collate_fn = EvalCollateFn(
         src_tokenizer=src_tokenizer,
@@ -63,7 +64,7 @@ def generate_predictions(
     model.eval()
 
     predictions: list[str] = []
-    amp_enabled = device.type == "cuda"
+    amp_enabled = amp and device.type == "cuda"
 
     for batch in tqdm(loader, desc="Inference"):
         with torch.autocast(device_type=device.type, enabled=amp_enabled, dtype=torch.bfloat16):
@@ -94,6 +95,7 @@ def generate_decoder_predictions(
     tgt_column: str,
     temperature: float = 0.0,
     top_p: float = 1.0,
+    amp: bool = True,
 ) -> list[str]:
     collate_fn = DecoderEvalCollateFn(
         tokenizer=tokenizer,
@@ -114,7 +116,7 @@ def generate_decoder_predictions(
     model.eval()
 
     predictions: list[str] = []
-    amp_enabled = device.type == "cuda"
+    amp_enabled = amp and device.type == "cuda"
 
     for batch in tqdm(loader, desc="Inference"):
         with torch.autocast(device_type=device.type, enabled=amp_enabled, dtype=torch.bfloat16):
@@ -184,6 +186,7 @@ def main() -> None:
     parser.add_argument("--pred", type=str, default="prediction")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument("--amp", action=BooleanOptionalAction, default=True)
     args = parser.parse_args()
     transformers.logging.set_verbosity_error()
 
@@ -210,6 +213,7 @@ def main() -> None:
             tgt_column=args.tgt,
             temperature=args.temperature,
             top_p=args.top_p,
+            amp=args.amp,
         )
     else:
         model = cast(DecoderOnly, model)
@@ -224,6 +228,7 @@ def main() -> None:
             tgt_column=args.tgt,
             temperature=args.temperature,
             top_p=args.top_p,
+            amp=args.amp,
         )
 
     dataset = dataset.add_column(args.pred, predictions)

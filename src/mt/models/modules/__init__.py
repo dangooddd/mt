@@ -9,6 +9,7 @@ from .mamba import (
 )
 from .ssm import S4Seq2Seq
 from .transformer import (
+    CompleteTransformerSeq2Seq,
     ExperimentalTransformerBilingualSeq2Seq,
     ExperimentalTransformerSeq2Seq,
     TransformerDecoder,
@@ -25,6 +26,7 @@ __all__ = [
     "MambaSeq2Seq",
     "S4Seq2Seq",
     "TransformerSeq2Seq",
+    "CompleteTransformerSeq2Seq",
     "ExperimentalTransformerSeq2Seq",
     "ExperimentalTransformerBilingualSeq2Seq",
     "TransformerDecoder",

@@ -1,11 +1,29 @@
+import math
+from typing import cast
+
 import torch
 import torch.nn as nn
 from flash_attn import flash_attn_func, flash_attn_varlen_func, flash_attn_varlen_kvpacked_func
 from flash_attn.bert_padding import pad_input, unpad_input
 from torch import Tensor
 
-from ..base import EncoderDecoder, EncoderDecoderBilingual
-from ..shared import FFN, RMSNorm
+from ..base import EncoderDecoderBilingual
+from ..shared import RMSNorm
+
+
+class FFN(nn.Module):
+    def __init__(self, d_model: int, d_ff: int):
+        super().__init__()
+        self.gate_proj = nn.Linear(d_model, d_ff, bias=False)
+        self.up_proj = nn.Linear(d_model, d_ff, bias=False)
+        self.down_proj = nn.Linear(d_ff, d_model, bias=False)
+        self.silu = nn.SiLU()
+        self.norm = RMSNorm(d_model)
+
+    def forward(self, x: Tensor):
+        x = self.norm(x)
+        x = self.down_proj(self.silu(self.gate_proj(x)) * self.up_proj(x))
+        return x
 
 
 class RotaryEmbedding(nn.Module):
@@ -29,11 +47,10 @@ class RotaryEmbedding(nn.Module):
         sin = freqs.sin().to(dtype=dtype)[None, :, None, :]
         return cos, sin
 
-
-def apply_rope(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
-    x1 = x[..., 0::2]
-    x2 = x[..., 1::2]
-    return torch.stack((x1 * cos - x2 * sin, x1 * sin + x2 * cos), dim=-1).flatten(-2)
+    def rotate(self, x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
+        x1 = x[..., 0::2]
+        x2 = x[..., 1::2]
+        return torch.stack((x1 * cos - x2 * sin, x1 * sin + x2 * cos), dim=-1).flatten(-2)
 
 
 class SelfAttention(nn.Module):
@@ -55,10 +72,10 @@ class SelfAttention(nn.Module):
         self.causal = causal
         self.rope = RotaryEmbedding(self.head_dim, theta=theta)
 
-        self.q_proj = nn.Linear(d_model, d_model)
-        self.k_proj = nn.Linear(d_model, d_model)
-        self.v_proj = nn.Linear(d_model, d_model)
-        self.out_proj = nn.Linear(d_model, d_model)
+        self.q_proj = nn.Linear(d_model, d_model, bias=False)
+        self.k_proj = nn.Linear(d_model, d_model, bias=False)
+        self.v_proj = nn.Linear(d_model, d_model, bias=False)
+        self.o_proj = nn.Linear(d_model, d_model, bias=False)
         self.norm = RMSNorm(d_model)
 
     def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
@@ -70,8 +87,8 @@ class SelfAttention(nn.Module):
         v = self.v_proj(x).view(batch_size, seq_length, self.num_heads, self.head_dim)
 
         cos, sin = self.rope(seq_length, x.device, q.dtype)
-        q = apply_rope(q, cos, sin)
-        k = apply_rope(k, cos, sin)
+        q = self.rope.rotate(q, cos, sin)
+        k = self.rope.rotate(k, cos, sin)
 
         if mask is None:
             x = flash_attn_func(
@@ -81,6 +98,7 @@ class SelfAttention(nn.Module):
                 dropout_p=self.dropout if self.training else 0.0,
                 causal=self.causal,
             )
+
         else:
             attention_mask = ~mask
             q, indices, cu_seqlens, max_seqlen, _ = unpad_input(q, attention_mask)
@@ -100,7 +118,7 @@ class SelfAttention(nn.Module):
             x = pad_input(x, indices, batch_size, seq_length)
 
         x = x.contiguous().view(batch_size, seq_length, d_model)
-        return self.out_proj(x)
+        return self.o_proj(x)
 
 
 class CrossAttention(nn.Module):
@@ -113,9 +131,9 @@ class CrossAttention(nn.Module):
         self.head_dim = d_model // num_heads
         self.dropout = dropout
 
-        self.q_proj = nn.Linear(d_model, d_model)
-        self.kv_proj = nn.Linear(d_model, 2 * d_model)
-        self.out_proj = nn.Linear(d_model, d_model)
+        self.q_proj = nn.Linear(d_model, d_model, bias=False)
+        self.kv_proj = nn.Linear(d_model, 2 * d_model, bias=False)
+        self.o_proj = nn.Linear(d_model, d_model, bias=False)
         self.x_norm = RMSNorm(d_model)
         self.y_norm = RMSNorm(d_model)
 
@@ -138,6 +156,7 @@ class CrossAttention(nn.Module):
             dtype=torch.int32,
             device=q.device,
         )
+
         x = flash_attn_varlen_kvpacked_func(
             q,
             kv,
@@ -148,27 +167,37 @@ class CrossAttention(nn.Module):
             dropout_p=self.dropout if self.training else 0.0,
             causal=False,
         )
+
         x = x.view(batch_size, x_length, self.num_heads, self.head_dim)
-
         x = x.contiguous().view(batch_size, x_length, d_model)
-        return self.out_proj(x)
+        return self.o_proj(x)
 
 
-class Transformer(nn.Module):
+class TransformerEncoder(nn.Module):
     def __init__(
         self,
         d_model: int,
         num_heads: int,
         dropout: float,
-        inner_multiplier: int = 2,
-        causal: bool = False,
+        inner_multiplier: float = 2.0,
         theta: float = 10000.0,
     ):
         super().__init__()
-        self.attention = SelfAttention(d_model, num_heads, dropout, causal=causal, theta=theta)
-        self.ffn = FFN(d_model, d_model * inner_multiplier)
 
-    def forward(self, x: Tensor, mask: Tensor | None = None):
+        self.attention = SelfAttention(
+            d_model,
+            num_heads,
+            dropout,
+            theta=theta,
+            causal=False,
+        )
+
+        self.ffn = FFN(
+            d_model,
+            int(d_model * inner_multiplier),
+        )
+
+    def forward(self, x: Tensor, mask: Tensor):
         x = x + self.attention(x, mask)
         x = x + self.ffn(x)
         return x
@@ -180,46 +209,52 @@ class TransformerDecoder(nn.Module):
         d_model: int = 256,
         num_heads: int = 8,
         dropout: float = 0.2,
-        inner_multiplier: int = 2,
+        inner_multiplier: float = 2.0,
         theta: float = 10000.0,
     ):
         super().__init__()
-        self.self_attn = Transformer(
+
+        self.self_attn = SelfAttention(
             d_model,
             num_heads=num_heads,
             dropout=dropout,
-            inner_multiplier=inner_multiplier,
-            causal=True,
             theta=theta,
+            causal=True,
         )
+
         self.cross_attn = CrossAttention(
             d_model,
             num_heads=num_heads,
             dropout=dropout,
         )
-        self.ffn = FFN(d_model, d_model * inner_multiplier)
+
+        self.ffn = FFN(
+            d_model,
+            int(d_model * inner_multiplier),
+        )
 
     def forward(self, x: Tensor, y: Tensor, mask: Tensor):
-        x = self.self_attn(x)
+        x = x + self.self_attn(x)
         x = x + self.cross_attn(x, y, mask)
         x = x + self.ffn(x)
         return x
 
 
-class ExperimentalTransformerBilingualSeq2Seq(EncoderDecoderBilingual):
+class CompleteTransformerSeq2Seq(EncoderDecoderBilingual):
     def __init__(
         self,
         vocab_size: int,
         pad_token_id: int,
         bos_token_id: int,
         eos_token_id: int,
-        encoder_layers: int = 2,
-        decoder_layers: int = 2,
+        encoder_layers: int = 4,
+        decoder_layers: int = 4,
         d_model: int = 256,
         num_heads: int = 8,
-        dropout: float = 0.2,
-        inner_multiplier: int = 2,
+        dropout: float = 0.1,
+        inner_multiplier: float = 2.0,
         theta: float = 10000.0,
+        init_std_base: float = 0.02,
     ):
         super().__init__(
             vocab_size=vocab_size,
@@ -234,7 +269,7 @@ class ExperimentalTransformerBilingualSeq2Seq(EncoderDecoderBilingual):
 
         self.encoder = nn.ModuleList(
             [
-                Transformer(
+                TransformerEncoder(
                     d_model=d_model,
                     num_heads=num_heads,
                     dropout=dropout,
@@ -257,6 +292,46 @@ class ExperimentalTransformerBilingualSeq2Seq(EncoderDecoderBilingual):
                 for _ in range(decoder_layers)
             ]
         )
+
+        self._init_weights(init_std_base)
+
+    def _init_weights(self, std_base: float):
+        std_res_enc = std_base / math.sqrt(2 * len(self.encoder))
+        std_res_dec = std_base / math.sqrt(3 * len(self.decoder))
+
+        nn.init.normal_(self.embedding.weight, mean=0.0, std=std_base)
+        nn.init.zeros_(self.embedding.weight[self.embedding.padding_idx])
+
+        nn.init.normal_(self.head.weight, mean=0.0, std=std_base)
+        nn.init.zeros_(self.head.bias)
+
+        for layer in self.encoder:
+            layer = cast(TransformerEncoder, layer)
+
+            nn.init.normal_(layer.attention.q_proj.weight, mean=0.0, std=std_base)
+            nn.init.normal_(layer.attention.k_proj.weight, mean=0.0, std=std_base)
+            nn.init.normal_(layer.attention.v_proj.weight, mean=0.0, std=std_base)
+            nn.init.normal_(layer.attention.o_proj.weight, mean=0.0, std=std_res_enc)
+
+            nn.init.normal_(layer.ffn.gate_proj.weight, mean=0.0, std=std_base)
+            nn.init.normal_(layer.ffn.up_proj.weight, mean=0.0, std=std_base)
+            nn.init.normal_(layer.ffn.down_proj.weight, mean=0.0, std=std_res_enc)
+
+        for layer in self.decoder:
+            layer = cast(TransformerDecoder, layer)
+
+            nn.init.normal_(layer.self_attn.q_proj.weight, mean=0.0, std=std_base)
+            nn.init.normal_(layer.self_attn.k_proj.weight, mean=0.0, std=std_base)
+            nn.init.normal_(layer.self_attn.v_proj.weight, mean=0.0, std=std_base)
+            nn.init.normal_(layer.self_attn.o_proj.weight, mean=0.0, std=std_res_dec)
+
+            nn.init.normal_(layer.cross_attn.q_proj.weight, mean=0.0, std=std_base)
+            nn.init.normal_(layer.cross_attn.kv_proj.weight, mean=0.0, std=std_base)
+            nn.init.normal_(layer.cross_attn.o_proj.weight, mean=0.0, std=std_res_dec)
+
+            nn.init.normal_(layer.ffn.gate_proj.weight, mean=0.0, std=std_base)
+            nn.init.normal_(layer.ffn.up_proj.weight, mean=0.0, std=std_base)
+            nn.init.normal_(layer.ffn.down_proj.weight, mean=0.0, std=std_res_dec)
 
     def encode(self, input_ids: Tensor, key_padding_mask: Tensor) -> Tensor:
         y = self.embedding(input_ids)
@@ -309,121 +384,6 @@ class ExperimentalTransformerBilingualSeq2Seq(EncoderDecoderBilingual):
             active = ~finished
             sequences[active, t] = next_token[active]
             finished |= next_token == self.eos_token_id
-
-            if finished.all():
-                break
-
-        return sequences
-
-
-class ExperimentalTransformerSeq2Seq(EncoderDecoder):
-    def __init__(
-        self,
-        src_vocab_size: int,
-        tgt_vocab_size: int,
-        src_pad_token_id: int,
-        tgt_pad_token_id: int,
-        tgt_bos_token_id: int,
-        tgt_eos_token_id: int,
-        encoder_layers: int = 2,
-        decoder_layers: int = 2,
-        d_model: int = 256,
-        num_heads: int = 8,
-        dropout: float = 0.2,
-        inner_multiplier: int = 2,
-        theta: float = 10000.0,
-    ):
-        super().__init__(
-            src_vocab_size=src_vocab_size,
-            tgt_vocab_size=tgt_vocab_size,
-            src_pad_token_id=src_pad_token_id,
-            tgt_pad_token_id=tgt_pad_token_id,
-            tgt_bos_token_id=tgt_bos_token_id,
-            tgt_eos_token_id=tgt_eos_token_id,
-        )
-
-        self.encoder_embedding = nn.Embedding(src_vocab_size, d_model, src_pad_token_id)
-        self.decoder_embedding = nn.Embedding(tgt_vocab_size, d_model, tgt_pad_token_id)
-        self.norm = RMSNorm(d_model)
-        self.head = nn.Linear(d_model, tgt_vocab_size)
-
-        self.encoder = nn.ModuleList(
-            [
-                Transformer(
-                    d_model=d_model,
-                    num_heads=num_heads,
-                    dropout=dropout,
-                    inner_multiplier=inner_multiplier,
-                    theta=theta,
-                )
-                for _ in range(encoder_layers)
-            ]
-        )
-
-        self.decoder = nn.ModuleList(
-            [
-                TransformerDecoder(
-                    d_model=d_model,
-                    num_heads=num_heads,
-                    dropout=dropout,
-                    inner_multiplier=inner_multiplier,
-                    theta=theta,
-                )
-                for _ in range(decoder_layers)
-            ]
-        )
-
-    def encode(self, input_ids: Tensor, key_padding_mask: Tensor) -> Tensor:
-        y = self.encoder_embedding(input_ids)
-        for layer in self.encoder:
-            y = layer(y, key_padding_mask)
-        return y
-
-    def decode(
-        self, output_ids: Tensor, encoder_outputs: Tensor, key_padding_mask: Tensor
-    ) -> Tensor:
-        x = self.decoder_embedding(output_ids)
-        for layer in self.decoder:
-            x = layer(x, encoder_outputs, key_padding_mask)
-        x = self.head(self.norm(x))
-        return x
-
-    def forward(self, input_ids: Tensor, output_ids: Tensor, attention_mask: Tensor) -> Tensor:
-        key_padding_mask = ~attention_mask.bool()
-        encoder_outputs = self.encode(input_ids, key_padding_mask)
-        return self.decode(output_ids, encoder_outputs, key_padding_mask)
-
-    @torch.no_grad()
-    def inference(
-        self,
-        input_ids: Tensor,
-        attention_mask: Tensor,
-        max_length: int = 128,
-        temperature: float = 0.0,
-        top_p: float = 1.0,
-    ) -> Tensor:
-        batch_size = input_ids.size(0)
-        device = input_ids.device
-        key_padding_mask = ~attention_mask.bool()
-        encoder_outputs = self.encode(input_ids, key_padding_mask)
-
-        sequences = torch.full(
-            (batch_size, max_length),
-            self.tgt_pad_token_id,
-            dtype=torch.long,
-            device=device,
-        )
-
-        sequences[:, 0] = self.tgt_bos_token_id
-        finished = torch.zeros(batch_size, dtype=torch.bool, device=device)
-
-        for t in range(1, max_length):
-            logits_t = self.decode(sequences[:, :t], encoder_outputs, key_padding_mask)[:, -1, :]
-            next_token = self._sample_next_token(logits_t, temperature, top_p)
-
-            active = ~finished
-            sequences[active, t] = next_token[active]
-            finished |= next_token == self.tgt_eos_token_id
 
             if finished.all():
                 break

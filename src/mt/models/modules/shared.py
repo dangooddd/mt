@@ -6,11 +6,21 @@ from mamba_ssm import Mamba
 from torch import Tensor
 
 
-class RMSNorm(nn.RMSNorm):
-    def forward(self, x: Tensor):
+class RMSNorm(nn.Module):
+    def __init__(self, hidden_size: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         dtype = x.dtype
+
         with torch.autocast(x.device.type, enabled=False):
-            return super().forward(x.to(dtype=self.weight.dtype)).to(dtype)
+            x = x.to(torch.float32)
+            v = x.pow(2).mean(-1, keepdim=True)
+            x = x * torch.rsqrt(v + self.eps)
+
+        return self.weight * x.to(dtype)
 
 
 class FFN(nn.Module):
@@ -60,10 +70,10 @@ class Attention(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, dropout: float, inner_multiplier: int = 2):
+    def __init__(self, d_model: int, num_heads: int, dropout: float, inner_multiplier: float = 2):
         super().__init__()
         self.attention = Attention(d_model, num_heads, dropout)
-        self.ffn = FFN(d_model, d_model * inner_multiplier)
+        self.ffn = FFN(d_model, int(d_model * inner_multiplier))
 
     def forward(self, x: Tensor, y: Tensor, mask: Tensor):
         x = x + self.attention(x, y, mask)

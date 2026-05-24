@@ -36,7 +36,7 @@ class TransformerDecoder(nn.Module):
         d_model: int = 256,
         num_heads: int = 8,
         dropout: float = 0.2,
-        inner_multiplier: int = 2,
+        inner_multiplier: float = 2,
     ):
         super().__init__()
 

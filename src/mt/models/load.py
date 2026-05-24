@@ -11,6 +11,7 @@ from ..tokenizers import (
     DecoderBaseTokenizer,
 )
 from .modules import (
+    CompleteTransformerSeq2Seq,
     DecoderOnly,
     EncoderDecoder,
     EncoderDecoderBilingual,
@@ -49,6 +50,7 @@ MODEL_CLASSES: dict[str, type[Model]] = {
     "transformer": TransformerSeq2Seq,
     "transformer-experimental": ExperimentalTransformerSeq2Seq,
     "transformer-bilingual": ExperimentalTransformerBilingualSeq2Seq,
+    "transformer-complete": CompleteTransformerSeq2Seq,
     "transformer-decoder": TransformerDecoder,
 }
 

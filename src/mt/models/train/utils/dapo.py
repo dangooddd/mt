@@ -4,11 +4,14 @@ import torch
 from torch import Tensor
 
 from mt.models.modules import DecoderOnly, EncoderDecoder, EncoderDecoderBilingual
-from mt.tokenizers import BaseTokenizer, DecoderBaseTokenizer
+from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer, DecoderBaseTokenizer
 
 from .pretrain import compute_decoder_loss
 from .pretrain import compute_bilingual_loss, compute_loss as compute_pretrain_loss
 from .rewards import RewardScorer
+
+EncoderDecoderModel = EncoderDecoder | EncoderDecoderBilingual
+EncoderDecoderTokenizer = BaseTokenizer | BilingualBaseTokenizer
 
 
 def completion_mask(token_ids: Tensor, eos_token_id: int) -> Tensor:
@@ -23,7 +26,7 @@ def compute_advantages(
     num_generations: int,
     device: torch.device,
     eps: float,
-) -> tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor, Tensor]:
     rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device).view(
         batch_size,
         num_generations,
@@ -31,7 +34,7 @@ def compute_advantages(
     mean = rewards_tensor.mean(dim=1, keepdim=True)
     std = rewards_tensor.std(dim=1, keepdim=True, unbiased=False)
     advantages = (rewards_tensor - mean) / (std + eps)
-    return advantages.reshape(-1), rewards_tensor
+    return advantages.reshape(-1), rewards_tensor, std.reshape(-1)
 
 
 def dapo_loss(
@@ -43,6 +46,7 @@ def dapo_loss(
     clip_eps_low: float,
     clip_eps_high: float,
     kl_beta: float,
+    kl_clip: float,
 ) -> tuple[Tensor, dict[str, Any]]:
     advantages = advantages.detach().view(-1, 1).to(dtype=per_token_logps.dtype)
     mask = mask.to(dtype=per_token_logps.dtype)
@@ -53,7 +57,11 @@ def dapo_loss(
         per_token_ratio * advantages,
         per_token_clipped_ratio * advantages,
     )
-    kl_delta = torch.clamp(ref_per_token_logps - per_token_logps, min=-20.0, max=20.0)
+    kl_delta = torch.clamp(
+        ref_per_token_logps - per_token_logps,
+        min=-kl_clip,
+        max=kl_clip,
+    )
     per_token_kl = torch.exp(kl_delta) - kl_delta - 1.0
 
     token_count = mask.sum().clamp_min(1.0)
@@ -75,7 +83,7 @@ def dapo_loss(
 
 
 def encoder_decoder_per_token_logps(
-    model: EncoderDecoder,
+    model: EncoderDecoderModel,
     src_ids: Tensor,
     src_mask: Tensor,
     generated_ids: Tensor,
@@ -145,12 +153,12 @@ def decoder_only_per_token_logps(
 
 
 def compute_encoder_decoder_dapo_loss(
-    model: EncoderDecoder,
+    model: EncoderDecoderModel,
     batch: dict[str, Any],
     device: torch.device,
-    old_policy: EncoderDecoder,
-    reference_policy: EncoderDecoder,
-    tgt_tokenizer: BaseTokenizer,
+    old_policy: EncoderDecoderModel,
+    reference_policy: EncoderDecoderModel,
+    tgt_tokenizer: EncoderDecoderTokenizer,
     reward_scorer: RewardScorer,
     num_generations: int,
     max_length: int,
@@ -161,6 +169,8 @@ def compute_encoder_decoder_dapo_loss(
     clip_eps_high: float,
     kl_beta: float,
     sft_mu: float,
+    reward_std_min: float,
+    kl_clip: float,
 ) -> tuple[Tensor, dict[str, Any]]:
     sft_src_ids = batch["src_ids"].to(device=device)
     sft_src_mask = batch["src_mask"].to(device=device)
@@ -203,13 +213,15 @@ def compute_encoder_decoder_dapo_loss(
 
     predictions = tgt_tokenizer.decode_batch(generated_ids.cpu().tolist())
     rewards = reward_scorer(predictions, references, sources)
-    advantages, rewards_tensor = compute_advantages(
+    advantages, rewards_tensor, reward_stds = compute_advantages(
         rewards,
         batch_size=batch_size,
         num_generations=num_generations,
         device=device,
         eps=advantage_eps,
     )
+    valid_groups = reward_stds >= reward_std_min
+    valid = valid_groups.repeat_interleave(num_generations)
 
     per_token_logps, _ = encoder_decoder_per_token_logps(
         model,
@@ -221,14 +233,15 @@ def compute_encoder_decoder_dapo_loss(
     )
 
     dapo_loss_value, metrics = dapo_loss(
-        per_token_logps=per_token_logps,
-        old_per_token_logps=old_per_token_logps,
-        ref_per_token_logps=ref_per_token_logps,
-        mask=mask,
-        advantages=advantages,
+        per_token_logps=per_token_logps[valid],
+        old_per_token_logps=old_per_token_logps[valid],
+        ref_per_token_logps=ref_per_token_logps[valid],
+        mask=mask[valid],
+        advantages=advantages[valid],
         clip_eps_low=clip_eps_low,
         clip_eps_high=clip_eps_high,
         kl_beta=kl_beta,
+        kl_clip=kl_clip,
     )
 
     if sft_mu > 0.0:
@@ -248,6 +261,7 @@ def compute_encoder_decoder_dapo_loss(
             "reward": float(rewards_tensor.mean().detach().cpu()),
             "reward_std": float(rewards_tensor.std(unbiased=False).detach().cpu()),
             "completion_length": float(mask.float().sum(dim=1).mean().detach().cpu()),
+            "reward_std_filter": float((~valid_groups).float().mean().detach().cpu()),
         }
     )
 
@@ -271,6 +285,8 @@ def compute_decoder_only_dapo_loss(
     clip_eps_high: float,
     kl_beta: float,
     sft_mu: float,
+    reward_std_min: float,
+    kl_clip: float,
 ) -> tuple[Tensor, dict[str, Any]]:
     input_ids = batch["inference_input_ids"].to(device=device)
     attention_mask = batch["inference_attention_mask"].to(device=device)
@@ -318,13 +334,15 @@ def compute_decoder_only_dapo_loss(
 
     predictions = tokenizer.decode_batch(generated_ids.cpu().tolist())
     rewards = reward_scorer(predictions, references, sources)
-    advantages, rewards_tensor = compute_advantages(
+    advantages, rewards_tensor, reward_stds = compute_advantages(
         rewards,
         batch_size=batch_size,
         num_generations=num_generations,
         device=device,
         eps=advantage_eps,
     )
+    valid_groups = reward_stds >= reward_std_min
+    valid = valid_groups.repeat_interleave(num_generations)
 
     per_token_logps, _ = decoder_only_per_token_logps(
         model,
@@ -337,14 +355,15 @@ def compute_decoder_only_dapo_loss(
     )
 
     dapo_loss_value, metrics = dapo_loss(
-        per_token_logps=per_token_logps,
-        old_per_token_logps=old_per_token_logps,
-        ref_per_token_logps=ref_per_token_logps,
-        mask=mask,
-        advantages=advantages,
+        per_token_logps=per_token_logps[valid],
+        old_per_token_logps=old_per_token_logps[valid],
+        ref_per_token_logps=ref_per_token_logps[valid],
+        mask=mask[valid],
+        advantages=advantages[valid],
         clip_eps_low=clip_eps_low,
         clip_eps_high=clip_eps_high,
         kl_beta=kl_beta,
+        kl_clip=kl_clip,
     )
 
     if sft_mu > 0.0:
@@ -361,6 +380,7 @@ def compute_decoder_only_dapo_loss(
             "reward": float(rewards_tensor.mean().detach().cpu()),
             "reward_std": float(rewards_tensor.std(unbiased=False).detach().cpu()),
             "completion_length": float(mask.float().sum(dim=1).mean().detach().cpu()),
+            "reward_std_filter": float((~valid_groups).float().mean().detach().cpu()),
         }
     )
 

@@ -1,4 +1,4 @@
-from argparse import ArgumentParser
+from argparse import ArgumentParser, BooleanOptionalAction
 from multiprocessing import freeze_support
 from pathlib import Path
 from typing import cast
@@ -45,19 +45,20 @@ def main() -> None:
     parser.add_argument("--log-every", type=int, default=25)
     parser.add_argument("--src", type=str, default="ru")
     parser.add_argument("--tgt", type=str, default="en")
-    parser.add_argument("--max-lr", type=float, default=0.0005)
-    parser.add_argument("--min-lr", type=float, default=0.00005)
-    parser.add_argument("--weight-decay", type=float, default=0.005)
+    parser.add_argument("--max-lr", type=float, default=0.0003)
+    parser.add_argument("--min-lr", type=float, default=0.00001)
+    parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--adam-beta1", type=float, default=0.9)
     parser.add_argument("--adam-beta2", type=float, default=0.999)
     parser.add_argument("--max-grad-norm", type=float, default=2.0)
     parser.add_argument("--batch-size", type=int, default=48)
-    parser.add_argument("--epoch-steps", type=int, default=10000)
-    parser.add_argument("--warmup-steps", type=int, default=20000)
-    parser.add_argument("--steps", type=int, default=1000000)
-    parser.add_argument("--max-length", type=int, default=512)
-    parser.add_argument("--label-smoothing", type=float, default=0.05)
-    parser.add_argument("--load-weights", action="store_true")
+    parser.add_argument("--epoch-steps", type=int, default=15200)
+    parser.add_argument("--warmup-steps", type=int, default=30400)
+    parser.add_argument("--steps", type=int, default=1520000)
+    parser.add_argument("--max-length", type=int, default=384)
+    parser.add_argument("--label-smoothing", type=float, default=0.1)
+    parser.add_argument("--load-weights", action=BooleanOptionalAction, default=False)
+    parser.add_argument("--amp", action=BooleanOptionalAction, default=True)
     args = parser.parse_args()
 
     dataset = load_from_disk(args.dataset_path)
@@ -100,14 +101,16 @@ def main() -> None:
         train_collate_fn = CollateFn(
             src_tokenizer=src_tokenizer,
             tgt_tokenizer=tgt_tokenizer,
-            max_length=args.max_length,
+            max_src_length=args.max_length,
+            max_tgt_length=args.max_length,
             src_column=args.src,
             tgt_column=args.tgt,
         )
         evaluation_collate_fn = EvalCollateFn(
             src_tokenizer=src_tokenizer,
             tgt_tokenizer=tgt_tokenizer,
-            max_length=args.max_length,
+            max_src_length=args.max_length,
+            max_tgt_length=args.max_length,
             src_column=args.src,
             tgt_column=args.tgt,
         )
@@ -140,9 +143,6 @@ def main() -> None:
             "tokenizer": tokenizer,
             "max_length": args.max_length,
         }
-
-    else:
-        raise TypeError(f"Unsupported model type: {type(model)}")
 
     warmup_scheduler = optim.lr_scheduler.LinearLR(
         optimizer,
@@ -185,6 +185,7 @@ def main() -> None:
         compute_loss=loss_fn,
         compute_loss_kwargs=loss_kwargs,
         max_grad_norm=args.max_grad_norm,
+        amp=args.amp,
     )
 
     evaluator = create_evaluator(
@@ -193,6 +194,7 @@ def main() -> None:
         compute_loss_kwargs=loss_kwargs,
         compute_predictions=predictions_fn,
         compute_predictions_kwargs=predictions_kwargs,
+        amp=args.amp,
     )
 
     experiment = args.experiment or args.model_dir.name
