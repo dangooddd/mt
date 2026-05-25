@@ -1,0 +1,14 @@
+{
+    "model": "transformer",
+    "args": {
+        "encoder_layers": 8,
+        "decoder_layers": 8,
+        "d_model": 768,
+        "num_heads": 12,
+        "dropout": 0.05,
+        "max_length_in": 1024,
+        "inner_multiplier": 3
+    },
+    "src_tokenizer": "unigram",
+    "tgt_tokenizer": "unigram"
+}

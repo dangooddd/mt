@@ -1,0 +1,14 @@
+{
+    "model": "transformer-bilingual",
+    "tokenizer": "bilingual-unigram",
+    "dtype": "bfloat16",
+    "args": {
+        "encoder_layers": 8,
+        "decoder_layers": 8,
+        "d_model": 768,
+        "num_heads": 12,
+        "dropout": 0.1,
+        "inner_multiplier": 3,
+        "theta": 5000.0
+    }
+}

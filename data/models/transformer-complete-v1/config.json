@@ -1,0 +1,14 @@
+{
+    "model": "transformer-complete",
+    "tokenizer": "bilingual-unigram",
+    "args": {
+        "encoder_layers": 12,
+        "decoder_layers": 12,
+        "d_model": 1024,
+        "num_heads": 16,
+        "dropout": 0.1,
+        "inner_multiplier": 3,
+        "init_std_base": 0.03,
+        "theta": 10000.0
+    }
+}
