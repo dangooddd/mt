@@ -1,152 +1,171 @@
-\documentclass[a4paper]{article}
-\usepackage{fontspec}
-\setmainfont{Times New Roman}[Ligatures=TeX]
-\newfontfamily\cyrillicfont{Times New Roman}[Ligatures=TeX]
-\IfFontExistsTF{JetBrains Mono}{
-    \setmonofont{JetBrains Mono}
-    \newfontfamily\cyrillicfonttt{JetBrains Mono}
-}{
-    \setmonofont{Courier New}
-    \newfontfamily\cyrillicfonttt{Courier New}
-}
+% !TeX program = pdflatex
+% !TeX encoding = UTF-8
+\documentclass[14pt,a4paper]{extarticle}
 
-\usepackage{polyglossia}
-\setmainlanguage{russian}
-\setotherlanguage{english}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage{cmap}
+  \usepackage[T2A]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage[russian]{babel}
+  \usepackage{tempora}
+\else
+  \usepackage{fontspec}
+  \usepackage{polyglossia}
+  \setmainlanguage{russian}
+  \setmainfont{Tinos}[
+    Path=/usr/share/fonts/truetype/croscore/,
+    Extension=.ttf,
+    UprightFont=*-Regular,
+    BoldFont=*-Bold,
+    ItalicFont=*-Italic,
+    BoldItalicFont=*-BoldItalic
+  ]
+  \setsansfont{Tinos}[
+    Path=/usr/share/fonts/truetype/croscore/,
+    Extension=.ttf,
+    UprightFont=*-Regular,
+    BoldFont=*-Bold,
+    ItalicFont=*-Italic,
+    BoldItalicFont=*-BoldItalic
+  ]
+  \setmonofont{Cousine}[
+    Path=/usr/share/fonts/truetype/croscore/,
+    Extension=.ttf,
+    UprightFont=*-Regular,
+    BoldFont=*-Bold,
+    ItalicFont=*-Italic,
+    BoldItalicFont=*-BoldItalic
+  ]
+\fi
 
-\usepackage{geometry}
-\geometry{
-    a4paper,
-    left=30mm,
-    right=15mm,
-    top=20mm,
-    bottom=20mm,
-}
+\ifPDFTeX
+  \newcommand{\CourseCodeFont}{\fontencoding{T1}\ttfamily}
+  \DeclareTextFontCommand{\texttt}{\fontencoding{T1}\ttfamily}
+\else
+  \newcommand{\CourseCodeFont}{\ttfamily}
+\fi
 
-% Межстрочный интервал и абзацы
+\usepackage[a4paper,left=30mm,right=10mm,top=20mm,bottom=20mm,headheight=0pt,headsep=0pt,footskip=12.5mm]{geometry}
 \usepackage{setspace}
 \onehalfspacing
-\usepackage{indentfirst}
 \setlength{\parindent}{1.25cm}
-\emergencystretch=3em
+\setlength{\parskip}{0pt}
+\frenchspacing
 \sloppy
 
-\usepackage{fix-cm}
-\renewcommand{\normalsize}{\fontsize{14pt}{21pt}\selectfont}
-
-% Математика
-\usepackage{amsmath, amssymb, amsthm}
-\usepackage{mathtools}
-\usepackage{tikz}
-\usetikzlibrary{shapes, arrows, positioning, fit, calc}
-
-% Теоремы
-\theoremstyle{plain}
-\newtheorem{theorem}{Теорема}[section]
-\newtheorem{lemma}{Лемма}[section]
-\newtheorem{corollary}{Следствие}[section]
-\theoremstyle{definition}
-\newtheorem{definition}{Определение}[section]
-
-% Списки
-\renewcommand{\labelitemi}{---}
-\setlength{\leftmargini}{2cm}
-
-% Таблицы и графика
-\usepackage{array, booktabs, longtable}
+\usepackage{indentfirst}
 \usepackage{graphicx}
+\usepackage{tabularx}
 \usepackage{float}
-\usepackage[skip=10pt, labelfont=bf]{caption}
-\captionsetup{labelsep=endash}
-\renewcommand{\captionlabelfont}{\bfseries\fontsize{12pt}{18pt}\selectfont}
-\renewcommand{\captionfont}{\fontsize{12pt}{18pt}\selectfont}
-\renewcommand{\arraystretch}{1.15}
+\usepackage{flafter}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{amsmath,amssymb}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds,shapes.geometric}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{tocloft}
+\usepackage{etoolbox}
+\usepackage{hyperref}
+\urlstyle{same}
+\def\UrlFont{\CourseCodeFont}
 
-% Ссылки и оглавление
-\usepackage[unicode, hidelinks]{hyperref}
-\usepackage{nameref}
-
-\addto\captionsrussian{
-    \renewcommand{\contentsname}{СОДЕРЖАНИЕ}
-    \renewcommand{\figurename}{Рисунок}
-    \renewcommand{\tablename}{Таблица}
-    \renewcommand{\lstlistingname}{Листинг}
-    \renewcommand\refname{\hfill СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ \hfill}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  citecolor=black,
+  urlcolor=black,
+  pdfauthor={},
+  pdftitle={Применение архитектуры Mamba в задаче нейронного машинного перевода}
 }
 
 % Заголовки
-\makeatletter
-\renewcommand{\@seccntformat}[1]{\csname the#1\endcsname.\quad}
-\renewcommand\section{\@startsection {section}{1}{\z@}%
-    {-3.5ex \@plus -1ex \@minus -.2ex}%
-    {2.3ex \@plus.2ex}%
-    {\centering\normalfont\bfseries\fontsize{16pt}{24pt}\selectfont}}
-\renewcommand\subsection{\@startsection {subsection}{2}{\z@}%
-    {-3.25ex\@plus -1ex \@minus -.2ex}%
-    {1.5ex \@plus .2ex}%
-    {\centering\normalfont\bfseries\fontsize{16pt}{24pt}\selectfont}}
-\makeatother
+\titlelabel{\thetitle\quad}
+\titleformat{\section}
+  {\normalfont\fontsize{16}{19}\bfseries\filcenter}
+  {\thesection}{0.5em}{}
+\titleformat{name=\section,numberless}
+  {\normalfont\fontsize{16}{19}\bfseries\filcenter}
+  {}{0pt}{}
+\titleformat{\subsection}
+  {\normalfont\fontsize{14}{17}\bfseries\filcenter}
+  {\thesubsection}{0.5em}{}
+\titleformat{\subsubsection}
+  {\normalfont\fontsize{14}{17}\itshape\filcenter}
+  {\thesubsubsection}{0.5em}{}
+\titlespacing*{\section}{0pt}{0pt}{2\baselineskip}
+\titlespacing*{\subsection}{0pt}{1.5\baselineskip}{1\baselineskip}
+\titlespacing*{\subsubsection}{0pt}{1\baselineskip}{0.8\baselineskip}
 
-% Библиография
-\makeatletter
-\renewcommand\@biblabel[1]{#1.}
-\makeatother
-\usepackage{url}
+\renewcommand{\contentsname}{СОДЕРЖАНИЕ}
+\setlength{\cftbeforesecskip}{4pt}
+\setlength{\cftbeforesubsecskip}{1pt}
+\renewcommand{\cftsecleader}{\cftdotfill{\cftdotsep}}
+\renewcommand{\cftsubsecleader}{\cftdotfill{\cftdotsep}}
 
-% Листинг
-\usepackage{xcolor}
-\usepackage{listings}
-
-\definecolor{codegreen}{rgb}{0,0.6,0}
-\definecolor{codeblue}{rgb}{0,0,0.8}
-\definecolor{codered}{rgb}{0.8,0,0}
-
+\captionsetup{font=normalsize,labelfont=bf,labelsep=endash,justification=centering,singlelinecheck=false}
+\captionsetup[figure]{position=bottom}
+\captionsetup[table]{position=top,justification=raggedright,singlelinecheck=false,name=Таблица}
+\AtBeginEnvironment{tabular}{\normalsize\singlespacing\setlength{\parindent}{0pt}}
+\AtBeginEnvironment{tabularx}{\normalsize\singlespacing\setlength{\parindent}{0pt}}
+\AtBeginEnvironment{longtable}{\normalsize\singlespacing\setlength{\parindent}{0pt}\renewcommand{\arraystretch}{1.8}}
+\setlist{nosep,leftmargin=1.25cm,itemindent=0pt,topsep=0pt,parsep=0pt,partopsep=0pt}
 \lstset{
-    basicstyle=\ttfamily\small,
-    backgroundcolor=\color{white},
-    frame=lines,
-    rulecolor=\color{black},
-    framerule=0.5pt,
-    breaklines=true,
-    breakatwhitespace=true,
-    breakindent=20pt,
-    numbers=left,
-    numberstyle=\tiny\color{gray},
-    stepnumber=1,
-    numbersep=5pt,
-    inputencoding=utf8,
-    extendedchars=true,
-    literate={},
-    tabsize=4,
-    showspaces=false,
-    showstringspaces=false,
-    showtabs=false,
-    captionpos=t,
-    belowcaptionskip=5pt,
-    commentstyle=\color{codegreen},
-    keywordstyle=\color{codeblue},
-    stringstyle=\color{codered},
-    identifierstyle=\color{black},
+  basicstyle=\CourseCodeFont\small,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible,
+  keepspaces=true
+}
+
+\renewcommand{\lstlistingname}{Листинг}
+\renewcommand{\refname}{СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ}
+\AtBeginDocument{%
+  \renewcommand{\contentsname}{СОДЕРЖАНИЕ}%
+  \renewcommand{\lstlistingname}{Листинг}%
+  \renewcommand{\refname}{СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ}%
+}
+\makeatletter
+\renewcommand{\@biblabel}[1]{#1.}
+\renewenvironment{thebibliography}[1]
+ {\clearpage\phantomsection\section*{\refname}\addcontentsline{toc}{section}{\refname}%
+  \list{\@biblabel{\@arabic\c@enumiv}}%
+       {\settowidth\labelwidth{\@biblabel{#1}}%
+        \leftmargin\labelwidth
+        \advance\leftmargin\labelsep
+        \usecounter{enumiv}%
+        \let\p@enumiv\@empty
+        \renewcommand\theenumiv{\@arabic\c@enumiv}}%
+  \sloppy\clubpenalty4000\@clubpenalty\clubpenalty\widowpenalty4000%
+  \sfcode`\.\@m}
+ {\def\@noitemerr{\@latex@warning{Empty `thebibliography' environment}}\endlist}
+\makeatother
+
+\newcommand{\structsection}[1]{%
+  \clearpage
+  \phantomsection
+  \section*{#1}
+  \addcontentsline{toc}{section}{#1}
 }
 
 
 \begin{document}
 
-\begin{center}
-    \tableofcontents
-\end{center}
-\newpage
+\tableofcontents
+\clearpage
 
-\input{parts/intro}
-\newpage
-\input{parts/theory}
-\newpage
-\input{parts/practise}
-\newpage
-\input{parts/outro}
-\newpage
-\input{parts/biblio}
-\newpage
-\input{parts/listing}
+\include{parts/intro}
+\include{parts/general}
+\include{parts/architectures}
+\include{parts/experiments}
+\include{parts/outro}
+\include{parts/biblio}
 
 \end{document}

@@ -1,0 +1,347 @@
+\section{АРХИТЕКТУРЫ МОДЕЛЕЙ NMT}
+
+\subsection{Encoder-Decoder архитектура}
+
+Архитектура encoder-decoder описывает перевод как две связанные стадии: кодирование исходного предложения и авторегрессионное порождение целевого предложения.
+В принятой постановке исходная последовательность имеет вид $x = (x_1, \ldots, x_m)$, а целевая последовательность --- $y = (y_1, \ldots, y_n)$.
+Encoder преобразует исходные токены в набор скрытых представлений:
+\begin{equation}
+    H = (h_1, \ldots, h_m) = \operatorname{Enc}_{\phi}(x_1, \ldots, x_m),
+\end{equation}
+где $H$ можно рассматривать как память модели об исходном предложении.
+Decoder строит распределение следующего целевого токена, используя уже построенный префикс перевода и представления encoder:
+\begin{equation}
+    \pi_t = \operatorname{Dec}_{\psi}(y_{<t}, H),
+    \qquad
+    p_{\theta}(y_t \mid y_{<t}, x) = \pi_t(y_t),
+\end{equation}
+где $\theta = (\phi, \psi)$ --- параметры всей модели.
+Тогда условная вероятность перевода записывается как
+\begin{equation}
+    p_{\theta}(y \mid x) = \prod_{t=1}^{n} p_{\theta}(y_t \mid y_{<t}, x).
+\end{equation}
+
+В такой формулировке encoder отвечает за представление исходного текста, а decoder --- за построение перевода.
+Связь между ними может быть реализована по-разному: через последнее состояние encoder, через attention над всеми состояниями encoder или через более сложные механизмы доступа к памяти.
+Для NMT особенно важен вариант с attention, поскольку decoder получает возможность на каждом шаге выбирать релевантные части исходного предложения.
+
+\subsection{Архитектура только декодера}
+
+В decoder-only постановке отдельный encoder отсутствует.
+Исходное предложение и целевой перевод записываются в одну авторегрессионную последовательность.
+Например, можно задать префикс
+\begin{equation}
+    q(x) = (\langle src \rangle, x_1, \ldots, x_m, \langle tgt \rangle),
+\end{equation}
+после которого модель должна продолжить последовательность токенами перевода.
+Условная вероятность в этом случае имеет вид
+\begin{equation}
+    p_{\theta}(y \mid x) =
+    \prod_{t=1}^{n} p_{\theta}(y_t \mid q(x), y_{<t}).
+\end{equation}
+
+Такая схема использует каузальную маску: каждый токен может обращаться только к предыдущим токенам общей последовательности.
+Во время обучения функция потерь обычно считается только по целевым токенам, а исходные токены играют роль условия или промпта.
+Преимущество decoder-only подхода состоит в единой формулировке задачи генерации, а недостаток --- в отсутствии отдельного представления исходного предложения и явного cross-attention между исходной и целевой последовательностями.
+
+
+\subsection{Общая теория базовых блоков}
+
+Архитектуры NMT различаются тем, какие блоки используются для обработки последовательности и передачи контекста между токенами.
+Для дальнейшего сравнения достаточно выделить три базовых механизма: LSTM, attention и Mamba.
+
+LSTM является рекуррентной архитектурой, предназначенной для обработки последовательностей и уменьшения проблемы затухающих градиентов \cite{lstm}.
+На каждом шаге слой получает входной вектор $z_t$, предыдущее скрытое состояние $h_{t-1}$ и состояние памяти $c_{t-1}$.
+Обновление памяти управляется входным, забывающим и выходным вентилями:
+\begin{equation}
+    \begin{aligned}
+        i_t &= \sigma(W_i z_t + U_i h_{t-1} + b_i), \\
+        f_t &= \sigma(W_f z_t + U_f h_{t-1} + b_f), \\
+        o_t &= \sigma(W_o z_t + U_o h_{t-1} + b_o), \\
+        \tilde{c}_t &= \tanh(W_c z_t + U_c h_{t-1} + b_c), \\
+        c_t &= f_t \odot c_{t-1} + i_t \odot \tilde{c}_t, \\
+        h_t &= o_t \odot \tanh(c_t).
+    \end{aligned}
+\end{equation}
+Состояние памяти позволяет LSTM переносить информацию через несколько шагов последовательности.
+Главное ограничение рекуррентного блока состоит в последовательной обработке токенов: шаг $t$ зависит от состояния шага $t-1$.
+Структура вычислений LSTM-ячейки показана на рисунке~\ref{fig:lstm-cell}.
+
+\begin{figure}[H]
+    \centering
+    \resizebox{\textwidth}{!}{%
+    \begin{tikzpicture}[
+        x=1cm,y=1cm,
+        font=\scriptsize,
+        layer/.style={draw, fill=white, rounded corners=2pt, minimum width=1.05cm, minimum height=0.70cm, align=center, inner sep=2pt},
+        op/.style={circle, draw, fill=white, minimum size=0.56cm, inner sep=0pt, align=center},
+        tensor/.style={draw, rounded corners=2pt, fill=white, minimum width=1.05cm, minimum height=0.52cm, align=center, inner sep=2pt},
+        arrow/.style={-{Latex[length=2.0mm]}, thick},
+        signal/.style={thick}
+    ]
+        \node[tensor] (hprev) at (-2.35,-1.60) {$h_{t-1}$};
+        \node[tensor] (zt) at (-2.35,-2.40) {$z_t$};
+        \node[tensor, minimum width=1.40cm] (concat) at (-0.55,-2.00) {$[h_{t-1}, z_t]$};
+
+        \node[layer] (fg) at (0.80,-0.85) {$\sigma$\\$f_t$};
+        \node[layer] (ig) at (2.90,-0.85) {$\sigma$\\$i_t$};
+        \node[layer] (cg) at (4.30,-0.85) {$\tanh$\\$\tilde{c}_t$};
+        \node[layer] (og) at (7.20,-0.85) {$\sigma$\\$o_t$};
+
+        \node[op] (mulf) at (0.80,1.20) {$\times$};
+        \node[op] (muli) at (3.60,0.55) {$\times$};
+        \node[op] (add) at (5.45,1.20) {$+$};
+        \node[layer, minimum width=1.05cm, minimum height=0.54cm] (tanhc) at (7.15,0.48) {$\tanh$};
+        \node[op] (mulo) at (8.85,0.10) {$\times$};
+
+        \draw[arrow] (hprev.east) -- ++(0.28,0) |- ([yshift=0.12cm]concat.west);
+        \draw[arrow] (zt.east) -- ++(0.28,0) |- ([yshift=-0.12cm]concat.west);
+        \draw[signal] (concat.east) -- (7.95,-2.00);
+        \draw[arrow] (0.80,-2.00) -- (fg.south);
+        \draw[arrow] (2.90,-2.00) -- (ig.south);
+        \draw[arrow] (4.30,-2.00) -- (cg.south);
+        \draw[arrow] (7.20,-2.00) -- (og.south);
+
+        \draw[arrow] (-1.25,1.20) node[left] {$c_{t-1}$} -- (mulf);
+        \draw[arrow] (fg) -- (mulf);
+        \draw[arrow] (mulf) -- (add);
+        \draw[arrow] (ig) -- (muli);
+        \draw[arrow] (cg) -- (muli);
+        \draw[arrow] (muli) -- (add);
+        \draw[arrow] (add) -- (10.25,1.20) node[right] {$c_t$};
+        \draw[arrow] (7.15,1.20) -- (tanhc.north);
+        \draw[arrow] (tanhc.east) -- (mulo.west);
+        \draw[arrow] (og.east) -| (mulo.south);
+        \draw[arrow] (mulo) -- (10.25,0.10) node[right] {$h_t$};
+    \end{tikzpicture}%
+    }
+    \caption{Блок-схема LSTM-ячейки}
+    \label{fig:lstm-cell}
+\end{figure}
+
+Attention позволяет модели напрямую обращаться к набору представлений, а не хранить весь контекст только в одном векторе \cite{luong,transformer}.
+В общем виде attention вычисляет взвешенную сумму значений $V$ по сходству запросов $Q$ и ключей $K$:
+\begin{equation}
+    \operatorname{Attention}(Q, K, V) =
+    \operatorname{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V,
+\end{equation}
+где $d_k$ --- размерность ключей.
+В self-attention запросы, ключи и значения строятся из одной и той же последовательности, поэтому токены внутри предложения обмениваются информацией друг с другом.
+В cross-attention запросы поступают из decoder, а ключи и значения --- из encoder; так decoder получает доступ к представлениям исходного предложения.
+Последовательность операций scaled dot-product attention приведена на рисунке~\ref{fig:scaled-dot-product-attention}.
+
+\begin{figure}[H]
+    \centering
+    \resizebox{0.95\textwidth}{!}{%
+    \begin{tikzpicture}[
+        x=1cm,y=1cm,
+        font=\scriptsize,
+        block/.style={draw, fill=white, rounded corners=2pt, minimum height=0.60cm, align=center, inner sep=3pt},
+        op/.style={circle, draw, fill=white, minimum size=0.58cm, inner sep=0pt, align=center},
+        tensor/.style={draw, rounded corners=2pt, fill=white, minimum width=0.85cm, minimum height=0.50cm, align=center, inner sep=2pt},
+        arrow/.style={-{Latex[length=2.0mm]}, thick}
+    ]
+        \node[tensor] (q) at (0.0,0.80) {$Q$};
+        \node[tensor] (k) at (0.0,-0.80) {$K$};
+        \node[op] (dot) at (1.50,0.00) {$\cdot$};
+        \node[block, minimum width=1.75cm] (scores) at (3.30,0.00) {$\dfrac{QK^T}{\sqrt{d_k}}$};
+        \node[op] (add) at (5.10,0.00) {$+$};
+        \node[tensor] (mask) at (5.10,1.20) {mask};
+        \node[block, minimum width=1.35cm] (softmax) at (6.90,0.00) {$\operatorname{softmax}$};
+        \node[op] (mulv) at (8.70,0.00) {$\times$};
+        \node[tensor] (v) at (8.70,-1.20) {$V$};
+        \node[tensor, minimum width=1.05cm] (out) at (10.50,0.00) {выход};
+
+        \draw[arrow] (q) -- (dot);
+        \draw[arrow] (k) -- (dot);
+        \draw[arrow] (dot) -- (scores);
+        \draw[arrow] (scores) -- (add);
+        \draw[arrow] (mask) -- (add);
+        \draw[arrow] (add) -- (softmax);
+        \draw[arrow] (softmax) -- (mulv);
+        \draw[arrow] (v) -- (mulv);
+        \draw[arrow] (mulv) -- (out);
+    \end{tikzpicture}%
+    }
+    \caption{Блок-схема scaled dot-product attention}
+    \label{fig:scaled-dot-product-attention}
+\end{figure}
+
+Multi-head attention применяет несколько attention-голов параллельно:
+\begin{equation}
+    \operatorname{MHA}(Q,K,V) = \operatorname{Concat}(head_1, \ldots, head_H)W^O,
+\end{equation}
+где каждая голова имеет собственные проекции $Q$, $K$ и $V$.
+Это позволяет модели одновременно учитывать разные типы связей между токенами.
+Структура multi-head attention представлена на рисунке~\ref{fig:multi-head-attention}.
+
+\begin{figure}[H]
+    \centering
+    \resizebox{0.88\textwidth}{!}{%
+    \begin{tikzpicture}[
+        x=1cm,y=1cm,
+        font=\scriptsize,
+        block/.style={draw, fill=white, rounded corners=2pt, minimum height=0.64cm, align=center, inner sep=3pt},
+        head/.style={draw, fill=white, rounded corners=3pt, text width=2.20cm, minimum height=0.86cm, align=center, inner sep=3pt},
+        tensor/.style={draw, rounded corners=2pt, fill=white, minimum width=0.95cm, minimum height=0.50cm, align=center, inner sep=2pt},
+        arrow/.style={-{Latex[length=2.0mm]}, thick}
+    ]
+        \node[tensor] (xq) at (0.0,1.10) {$X_Q$};
+        \node[tensor] (xk) at (0.0,0.00) {$X_K$};
+        \node[tensor] (xv) at (0.0,-1.10) {$X_V$};
+
+        \node[block, text width=3.20cm, minimum height=2.70cm] (proj) at (2.85,0.0)
+            {$[Q_1,\ldots,Q_H]=X_QW^Q$\\[2pt]
+             $[K_1,\ldots,K_H]=X_KW^K$\\[2pt]
+             $[V_1,\ldots,V_H]=X_VW^V$};
+
+        \node[head] (h1) at (7.20,1.45) {$head_1$\\$\operatorname{Attn}$\\$(Q_1,K_1,V_1)$};
+        \node[head] (h2) at (7.20,0.00) {$head_2$\\$\operatorname{Attn}$\\$(Q_2,K_2,V_2)$};
+        \node[head] (hh) at (7.20,-1.45) {$head_H$\\$\operatorname{Attn}$\\$(Q_H,K_H,V_H)$};
+        \node at (7.20,-0.72) {$\vdots$};
+
+        \coordinate (split) at ($(proj.east)+(0.90,0)$);
+        \coordinate (merge) at ($(h2.east)+(h2.west)-(split)$);
+        \node[block, anchor=west, minimum width=1.05cm] (concat) at ($(merge)+(0.90,0)$) {Concat};
+        \node[block, anchor=west, text width=1.30cm] (wo) at ($(concat.east)+(0.65,0)$) {$W^O$};
+        \node[tensor, anchor=west] (out) at ($(wo.east)+(0.65,0)$) {выход};
+
+        \draw[arrow] (xq.east) -- (proj.west |- xq.east);
+        \draw[arrow] (xk.east) -- (proj.west);
+        \draw[arrow] (xv.east) -- (proj.west |- xv.east);
+
+        \draw[thick] (proj.east) -- (split);
+        \draw[thick] (split |- h1.west) -- (split |- hh.west);
+        \draw[arrow] (split |- h1.west) -- (h1.west);
+        \draw[arrow] (split) -- (h2.west);
+        \draw[arrow] (split |- hh.west) -- (hh.west);
+
+        \draw[thick] (h1.east) -- (merge |- h1.east);
+        \draw[thick] (h2.east) -- (merge);
+        \draw[thick] (hh.east) -- (merge |- hh.east);
+        \draw[thick] (merge |- h1.east) -- (merge |- hh.east);
+        \draw[arrow] (merge) -- (concat.west);
+        \draw[arrow] (concat) -- (wo);
+        \draw[arrow] (wo) -- (out);
+    \end{tikzpicture}%
+    }
+    \caption{Блок-схема multi-head attention}
+    \label{fig:multi-head-attention}
+\end{figure}
+
+В self-attention выполняется $X_Q = X_K = X_V$.
+В cross-attention последовательность запросов $X_Q$ поступает из decoder, а $X_K$ и $X_V$ строятся по выходам encoder.
+
+Mamba относится к моделям пространства состояний с избирательным обновлением состояния \cite{mamba}.
+В упрощенном виде такой блок можно записать как
+\begin{equation}
+    s_t = A_t s_{t-1} + B_t z_t, \qquad r_t = C_t s_t,
+\end{equation}
+где $s_t$ --- скрытое состояние, $z_t$ --- входной вектор, а $r_t$ --- выход блока.
+Ключевая особенность Mamba состоит в том, что параметры обновления зависят от текущего входа, поэтому модель может избирательно сохранять или забывать информацию.
+В отличие от self-attention, такой блок обрабатывает последовательность за линейное время по ее длине, что делает его привлекательным для длинных контекстов.
+Основные вычислительные ветви Mamba-блока показаны на рисунке~\ref{fig:mamba-block}.
+
+\begin{figure}[H]
+    \centering
+    \resizebox{0.95\textwidth}{!}{%
+    \begin{tikzpicture}[
+        x=1cm,y=1cm,
+        font=\scriptsize,
+        proj/.style={trapezium, trapezium left angle=70, trapezium right angle=110, draw, fill=white, minimum width=1.75cm, minimum height=0.62cm, align=center, inner sep=2pt},
+        trans/.style={draw, fill=white, minimum width=1.35cm, minimum height=0.62cm, align=center, inner sep=2pt},
+        act/.style={circle, draw, fill=white, minimum size=0.62cm, inner sep=0pt, align=center},
+        tensor/.style={draw, rounded corners=2pt, fill=white, minimum width=0.85cm, minimum height=0.50cm, align=center, inner sep=2pt},
+        arrow/.style={-{Latex[length=2.0mm]}, thick},
+        line/.style={thick}
+    ]
+        \node[tensor] (inp) at (0.00,0.00) {вход};
+        \coordinate (split) at (1.25,0.00);
+
+        \node[proj] (pin1) at (2.80,1.20) {Projection};
+        \node[trans] (conv) at (5.15,1.20) {Conv};
+        \node[act] (silu1) at (6.60,1.20) {$\sigma$};
+        \node[trans] (ssm) at (8.05,1.20) {SSM};
+        \node[act] (mul) at (9.50,1.20) {$\times$};
+        \node[proj] (pout) at (11.30,1.20) {Projection};
+        \node[tensor] (out) at (13.35,1.20) {выход};
+
+        \node[proj] (pin2) at (2.80,-1.20) {Projection};
+        \node[act] (silu2) at (6.60,-1.20) {$\sigma$};
+        \coordinate (gate) at (9.50,-1.20);
+
+        \draw[arrow] (inp.east) -- (split);
+        \draw[line] (split |- pin1.west) -- (split |- pin2.west);
+        \draw[arrow] (split |- pin1.west) -- (pin1.west);
+        \draw[arrow] (split |- pin2.west) -- (pin2.west);
+
+        \draw[arrow] (pin1.east) -- (conv.west);
+        \draw[arrow] (conv.east) -- (silu1.west);
+        \draw[arrow] (silu1.east) -- (ssm.west);
+        \draw[arrow] (ssm.east) -- (mul.west);
+        \draw[arrow] (mul.east) -- (pout.west);
+        \draw[arrow] (pout.east) -- (out.west);
+
+        \draw[arrow] (pin2.east) -- (silu2.west);
+        \draw[line] (silu2.east) -- (gate);
+        \draw[arrow] (gate) -- (mul.south);
+    \end{tikzpicture}%
+    }
+    \caption{Блок-схема Mamba-блока}
+    \label{fig:mamba-block}
+\end{figure}
+
+\subsection{LSTM Encoder-Decoder}
+
+LSTM Encoder-Decoder является классической схемой нейронного машинного перевода \cite{seq2seq,luong}.
+Encoder последовательно читает токены исходного предложения и строит скрытые состояния, содержащие информацию о прочитанном префиксе.
+Decoder также является LSTM и авторегрессионно генерирует перевод: на каждом шаге он получает предыдущий целевой токен и свое предыдущее состояние.
+
+В раннем варианте вся информация об исходном предложении передавалась decoder через последнее состояние encoder.
+Для длинных предложений этого недостаточно, поэтому в NMT обычно используется attention над состояниями encoder.
+В этом случае decoder на каждом шаге формирует контекстный вектор как взвешенную сумму encoder-состояний и выбирает следующий токен с учетом этого контекста.
+Такая архитектура хорошо показывает основную идею encoder-decoder перевода, но хуже параллелизуется по сравнению с Transformer.
+
+\subsection{Transformer}
+
+\subsubsection{Transformer Encoder-Decoder}
+
+Transformer Encoder-Decoder строится из стеков self-attention и полносвязных слоев \cite{transformer}.
+Encoder обрабатывает исходное предложение с помощью self-attention, поэтому каждый токен может учитывать все остальные токены исходной последовательности.
+Decoder содержит causal self-attention, который запрещает смотреть на будущие токены перевода, и cross-attention, через который decoder обращается к выходам encoder.
+
+Главное преимущество Transformer состоит в том, что self-attention позволяет параллельно обрабатывать все позиции последовательности во время обучения.
+Кроме того, cross-attention явно разделяет представление исходного текста и процесс генерации целевого текста.
+Ограничением является квадратичная сложность self-attention по длине последовательности, из-за чего обработка длинных текстов становится вычислительно дорогой.
+
+\subsubsection{Transformer Decoder}
+
+Transformer Decoder использует decoder-only постановку.
+Вместо отдельного encoder исходный текст и перевод записываются в одну последовательность, например в виде пары ``исходное предложение --- целевое предложение''.
+Модель обучается как авторегрессионная языковая модель: она видит исходные токены и уже построенную часть перевода, после чего предсказывает следующий целевой токен.
+
+В такой архитектуре используется causal self-attention по всей объединенной последовательности.
+Преимущество подхода состоит в простоте: одна и та же модель может решать перевод и другие задачи генерации текста.
+Недостаток состоит в том, что нет отдельного cross-attention между encoder и decoder, поэтому связь исходного текста с переводом должна быть выучена внутри общего causal-контекста.
+
+\subsection{Mamba}
+
+\subsubsection{Mamba Encoder-Decoder гибрид с Attention}
+
+Гибридная Mamba Encoder-Decoder архитектура сохраняет общую схему encoder-decoder, но заменяет self-attention-блоки на блоки Mamba.
+Encoder строит представления исходной последовательности с помощью Mamba-блоков; для encoder могут использоваться двунаправленные или некаузальные варианты, чтобы каждый токен учитывал контекст с обеих сторон.
+Decoder использует каузальные Mamba-блоки, так как перевод строится слева направо.
+
+Связь между исходным предложением и переводом в такой схеме сохраняется через attention, обычно через cross-attention от decoder к выходам encoder.
+Иными словами, Mamba заменяет внутреннее self-attention-моделирование последовательностей, но decoder по-прежнему может обращаться к представлениям исходного предложения.
+Такой вариант является гибридом: он объединяет линейную обработку последовательности в Mamba с явным механизмом сопоставления исходных и целевых токенов через attention.
+
+\subsubsection{Mamba Decoder}
+
+Mamba Decoder является decoder-only моделью, в которой вместо causal self-attention используются каузальные Mamba-блоки.
+Как и в Transformer Decoder, исходное предложение и перевод представляются одной последовательностью, а функция потерь обычно считается по токенам целевого перевода.
+На каждом шаге Mamba обновляет скрытое состояние и на его основе предсказывает следующий токен.
+
+Такой подход сохраняет простоту decoder-only формулировки и при этом имеет линейную сложность по длине последовательности.
+Это делает Mamba Decoder потенциально удобным для длинных входов и эффективного авторегрессионного декодирования.
+Однако отсутствие отдельного encoder и cross-attention означает, что вся информация об исходном предложении должна быть сохранена во внутреннем состоянии модели, поэтому качество перевода сильнее зависит от способности Mamba удерживать релевантный контекст.
