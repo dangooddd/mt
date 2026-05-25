@@ -1,0 +1,152 @@
+\documentclass[a4paper]{article}
+\usepackage{fontspec}
+\setmainfont{Times New Roman}[Ligatures=TeX]
+\newfontfamily\cyrillicfont{Times New Roman}[Ligatures=TeX]
+\IfFontExistsTF{JetBrains Mono}{
+    \setmonofont{JetBrains Mono}
+    \newfontfamily\cyrillicfonttt{JetBrains Mono}
+}{
+    \setmonofont{Courier New}
+    \newfontfamily\cyrillicfonttt{Courier New}
+}
+
+\usepackage{polyglossia}
+\setmainlanguage{russian}
+\setotherlanguage{english}
+
+\usepackage{geometry}
+\geometry{
+    a4paper,
+    left=30mm,
+    right=15mm,
+    top=20mm,
+    bottom=20mm,
+}
+
+% Межстрочный интервал и абзацы
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{indentfirst}
+\setlength{\parindent}{1.25cm}
+\emergencystretch=3em
+\sloppy
+
+\usepackage{fix-cm}
+\renewcommand{\normalsize}{\fontsize{14pt}{21pt}\selectfont}
+
+% Математика
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{mathtools}
+\usepackage{tikz}
+\usetikzlibrary{shapes, arrows, positioning, fit, calc}
+
+% Теоремы
+\theoremstyle{plain}
+\newtheorem{theorem}{Теорема}[section]
+\newtheorem{lemma}{Лемма}[section]
+\newtheorem{corollary}{Следствие}[section]
+\theoremstyle{definition}
+\newtheorem{definition}{Определение}[section]
+
+% Списки
+\renewcommand{\labelitemi}{---}
+\setlength{\leftmargini}{2cm}
+
+% Таблицы и графика
+\usepackage{array, booktabs, longtable}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage[skip=10pt, labelfont=bf]{caption}
+\captionsetup{labelsep=endash}
+\renewcommand{\captionlabelfont}{\bfseries\fontsize{12pt}{18pt}\selectfont}
+\renewcommand{\captionfont}{\fontsize{12pt}{18pt}\selectfont}
+\renewcommand{\arraystretch}{1.15}
+
+% Ссылки и оглавление
+\usepackage[unicode, hidelinks]{hyperref}
+\usepackage{nameref}
+
+\addto\captionsrussian{
+    \renewcommand{\contentsname}{СОДЕРЖАНИЕ}
+    \renewcommand{\figurename}{Рисунок}
+    \renewcommand{\tablename}{Таблица}
+    \renewcommand{\lstlistingname}{Листинг}
+    \renewcommand\refname{\hfill СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ \hfill}
+}
+
+% Заголовки
+\makeatletter
+\renewcommand{\@seccntformat}[1]{\csname the#1\endcsname.\quad}
+\renewcommand\section{\@startsection {section}{1}{\z@}%
+    {-3.5ex \@plus -1ex \@minus -.2ex}%
+    {2.3ex \@plus.2ex}%
+    {\centering\normalfont\bfseries\fontsize{16pt}{24pt}\selectfont}}
+\renewcommand\subsection{\@startsection {subsection}{2}{\z@}%
+    {-3.25ex\@plus -1ex \@minus -.2ex}%
+    {1.5ex \@plus .2ex}%
+    {\centering\normalfont\bfseries\fontsize{16pt}{24pt}\selectfont}}
+\makeatother
+
+% Библиография
+\makeatletter
+\renewcommand\@biblabel[1]{#1.}
+\makeatother
+\usepackage{url}
+
+% Листинг
+\usepackage{xcolor}
+\usepackage{listings}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codeblue}{rgb}{0,0,0.8}
+\definecolor{codered}{rgb}{0.8,0,0}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{white},
+    frame=lines,
+    rulecolor=\color{black},
+    framerule=0.5pt,
+    breaklines=true,
+    breakatwhitespace=true,
+    breakindent=20pt,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    stepnumber=1,
+    numbersep=5pt,
+    inputencoding=utf8,
+    extendedchars=true,
+    literate={},
+    tabsize=4,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    captionpos=t,
+    belowcaptionskip=5pt,
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{codeblue},
+    stringstyle=\color{codered},
+    identifierstyle=\color{black},
+}
+
+
+\begin{document}
+
+\begin{center}
+    \tableofcontents
+\end{center}
+\newpage
+
+\input{parts/intro}
+\newpage
+\input{parts/theory}
+\newpage
+\input{parts/practise}
+\newpage
+\input{parts/outro}
+\newpage
+\input{parts/biblio}
+\newpage
+\input{parts/listing}
+
+\end{document}
