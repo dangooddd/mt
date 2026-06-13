@@ -1,50 +1,16 @@
-% !TeX program = pdflatex
-% !TeX encoding = UTF-8
 \documentclass[14pt,a4paper]{extarticle}
 
-\usepackage{iftex}
-\ifPDFTeX
-  \usepackage{cmap}
-  \usepackage[T2A]{fontenc}
-  \usepackage[utf8]{inputenc}
-  \usepackage[russian]{babel}
-  \usepackage{tempora}
-\else
-  \usepackage{fontspec}
-  \usepackage{polyglossia}
-  \setmainlanguage{russian}
-  \setmainfont{Tinos}[
-    Path=/usr/share/fonts/truetype/croscore/,
-    Extension=.ttf,
-    UprightFont=*-Regular,
-    BoldFont=*-Bold,
-    ItalicFont=*-Italic,
-    BoldItalicFont=*-BoldItalic
-  ]
-  \setsansfont{Tinos}[
-    Path=/usr/share/fonts/truetype/croscore/,
-    Extension=.ttf,
-    UprightFont=*-Regular,
-    BoldFont=*-Bold,
-    ItalicFont=*-Italic,
-    BoldItalicFont=*-BoldItalic
-  ]
-  \setmonofont{Cousine}[
-    Path=/usr/share/fonts/truetype/croscore/,
-    Extension=.ttf,
-    UprightFont=*-Regular,
-    BoldFont=*-Bold,
-    ItalicFont=*-Italic,
-    BoldItalicFont=*-BoldItalic
-  ]
-\fi
-
-\ifPDFTeX
-  \newcommand{\CourseCodeFont}{\fontencoding{T1}\ttfamily}
-  \DeclareTextFontCommand{\texttt}{\fontencoding{T1}\ttfamily}
-\else
-  \newcommand{\CourseCodeFont}{\ttfamily}
-\fi
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage[babelshorthands=false]{russian}
+\gappto\captionsrussian{%
+  \renewcommand{\contentsname}{СОДЕРЖАНИЕ}%
+  \renewcommand{\refname}{СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ}%
+}
+\setmainfont{Times New Roman}
+\setsansfont{Arial}
+\setmonofont{Consolas}
+\newcommand{\CourseCodeFont}{\ttfamily}
 
 \usepackage[a4paper,left=30mm,right=10mm,top=20mm,bottom=20mm,headheight=0pt,headsep=0pt,footskip=12.5mm]{geometry}
 \usepackage{setspace}
@@ -158,6 +124,8 @@
 
 \begin{document}
 
+\IfFileExists{.__texlab_dummy}{\bibliography{texlab_refs}}{}
+
 \tableofcontents
 \clearpage
 
@@ -166,6 +134,6 @@
 \include{parts/architectures}
 \include{parts/experiments}
 \include{parts/outro}
-\include{parts/biblio}
+\input{parts/biblio}
 
 \end{document}
