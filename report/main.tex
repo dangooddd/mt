@@ -124,8 +124,6 @@
 
 \begin{document}
 
-\IfFileExists{.__texlab_dummy}{\bibliography{texlab_refs}}{}
-
 \tableofcontents
 \clearpage
 
@@ -134,6 +132,8 @@
 \include{parts/architectures}
 \include{parts/experiments}
 \include{parts/outro}
-\input{parts/biblio}
+\sloppy
+\bibliographystyle{style}
+\bibliography{references}
 
 \end{document}
