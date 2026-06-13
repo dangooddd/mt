@@ -12,11 +12,12 @@ from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 from tqdm import tqdm
 
-from mt.tokenizers import BaseTokenizer, DecoderBaseTokenizer
+from mt.tokenizers import BaseTokenizer, BilingualBaseTokenizer, DecoderBaseTokenizer
 
 from .load import load_from_config
-from .modules import DecoderOnly, EncoderDecoder
+from .modules import DecoderOnly, EncoderDecoder, EncoderDecoderBilingual
 from .train.utils.pretrain import (
+    BilingualEvalCollateFn,
     DecoderEvalCollateFn,
     EvalCollateFn,
     compute_decoder_predictions,
@@ -73,6 +74,58 @@ def generate_predictions(
                 batch=batch,
                 device=device,
                 tgt_tokenizer=tgt_tokenizer,
+                max_length=max_length,
+                temperature=temperature,
+                top_p=top_p,
+            )
+
+        predictions.extend(batch_predictions)
+
+    return predictions
+
+
+@torch.inference_mode()
+def generate_bilingual_predictions(
+    dataset: Dataset,
+    model: EncoderDecoderBilingual,
+    tokenizer: BilingualBaseTokenizer,
+    batch_size: int,
+    max_length: int,
+    device: torch.device,
+    src_column: str,
+    tgt_column: str,
+    temperature: float = 0.0,
+    top_p: float = 1.0,
+    amp: bool = True,
+) -> list[str]:
+    collate_fn = BilingualEvalCollateFn(
+        tokenizer=tokenizer,
+        src_column=src_column,
+        tgt_column=tgt_column,
+        max_length=max_length,
+    )
+
+    loader = DataLoader(
+        cast(TorchDataset, dataset),
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
+        collate_fn=collate_fn,
+    )
+
+    model.to(device)
+    model.eval()
+
+    predictions: list[str] = []
+    amp_enabled = amp and device.type == "cuda"
+
+    for batch in tqdm(loader, desc="Inference"):
+        with torch.autocast(device_type=device.type, enabled=amp_enabled, dtype=torch.bfloat16):
+            batch_predictions, _ = compute_predictions(
+                model=model,
+                batch=batch,
+                device=device,
+                tgt_tokenizer=tokenizer,
                 max_length=max_length,
                 temperature=temperature,
                 top_p=top_p,
@@ -198,9 +251,23 @@ def main() -> None:
     max_length = int(config.get("max_length", 256))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    if isinstance(tokenizers, tuple):
+    if isinstance(model, EncoderDecoderBilingual):
+        tokenizer = cast(BilingualBaseTokenizer, tokenizers)
+        predictions = generate_bilingual_predictions(
+            dataset=dataset,
+            model=model,
+            tokenizer=tokenizer,
+            batch_size=BATCH_SIZE,
+            max_length=max_length,
+            device=device,
+            src_column=args.src,
+            tgt_column=args.tgt,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            amp=args.amp,
+        )
+    elif isinstance(model, EncoderDecoder):
         src_tokenizer, tgt_tokenizer = cast(tuple[BaseTokenizer, BaseTokenizer], tokenizers)
-        model = cast(EncoderDecoder, model)
         predictions = generate_predictions(
             dataset=dataset,
             model=model,
@@ -215,12 +282,12 @@ def main() -> None:
             top_p=args.top_p,
             amp=args.amp,
         )
-    else:
-        model = cast(DecoderOnly, model)
+    elif isinstance(model, DecoderOnly):
+        tokenizer = cast(DecoderBaseTokenizer, tokenizers)
         predictions = generate_decoder_predictions(
             dataset=dataset,
             model=model,
-            tokenizer=tokenizers,
+            tokenizer=tokenizer,
             batch_size=BATCH_SIZE,
             max_length=max_length,
             device=device,
@@ -230,6 +297,8 @@ def main() -> None:
             top_p=args.top_p,
             amp=args.amp,
         )
+    else:
+        raise TypeError(f"Unsupported model type: {type(model).__name__}")
 
     dataset = dataset.add_column(args.pred, predictions)
     scorer = load_from_checkpoint(download_model(SCORE_MODEL_NAME))
