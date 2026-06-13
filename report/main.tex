@@ -30,7 +30,6 @@
 \usepackage{multirow}
 \usepackage{array}
 \usepackage{amsmath,amssymb}
-\usepackage{listings}
 \usepackage{xcolor}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds,shapes.geometric}
@@ -83,19 +82,9 @@
 \AtBeginEnvironment{tabularx}{\normalsize\singlespacing\setlength{\parindent}{0pt}}
 \AtBeginEnvironment{longtable}{\normalsize\singlespacing\setlength{\parindent}{0pt}\renewcommand{\arraystretch}{1.8}}
 \setlist{nosep,leftmargin=1.25cm,itemindent=0pt,topsep=0pt,parsep=0pt,partopsep=0pt}
-\lstset{
-  basicstyle=\CourseCodeFont\small,
-  breaklines=true,
-  frame=single,
-  columns=fullflexible,
-  keepspaces=true
-}
-
-\renewcommand{\lstlistingname}{Листинг}
 \renewcommand{\refname}{СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ}
 \AtBeginDocument{%
   \renewcommand{\contentsname}{СОДЕРЖАНИЕ}%
-  \renewcommand{\lstlistingname}{Листинг}%
   \renewcommand{\refname}{СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ}%
 }
 \makeatletter
@@ -114,14 +103,6 @@
  {\def\@noitemerr{\@latex@warning{Empty `thebibliography' environment}}\endlist}
 \makeatother
 
-\newcommand{\structsection}[1]{%
-  \clearpage
-  \phantomsection
-  \section*{#1}
-  \addcontentsline{toc}{section}{#1}
-}
-
-
 \begin{document}
 
 \tableofcontents
@@ -132,7 +113,6 @@
 \include{parts/architectures}
 \include{parts/experiments}
 \include{parts/outro}
-\sloppy
 \bibliographystyle{style}
 \bibliography{references}
 
