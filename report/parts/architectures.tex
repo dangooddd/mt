@@ -12,69 +12,69 @@ LSTM является рекуррентной архитектурой, пре�
 На каждом шаге слой получает входной вектор $z_t$, предыдущее скрытое состояние $h_{t-1}$ и состояние памяти $c_{t-1}$.
 Обновление памяти управляется входным, забывающим и выходным вентилями:
 \[
-    \begin{aligned}
-        i_t &= \sigma(W_i z_t + U_i h_{t-1} + b_i), \\
-        f_t &= \sigma(W_f z_t + U_f h_{t-1} + b_f), \\
-        o_t &= \sigma(W_o z_t + U_o h_{t-1} + b_o), \\
-        \tilde{c}_t &= \tanh(W_c z_t + U_c h_{t-1} + b_c), \\
-        c_t &= f_t \odot c_{t-1} + i_t \odot \tilde{c}_t, \\
-        h_t &= o_t \odot \tanh(c_t).
-    \end{aligned}
+	\begin{aligned}
+		i_t         & = \sigma(W_i z_t + U_i h_{t-1} + b_i),       \\
+		f_t         & = \sigma(W_f z_t + U_f h_{t-1} + b_f),       \\
+		o_t         & = \sigma(W_o z_t + U_o h_{t-1} + b_o),       \\
+		\tilde{c}_t & = \tanh(W_c z_t + U_c h_{t-1} + b_c),        \\
+		c_t         & = f_t \odot c_{t-1} + i_t \odot \tilde{c}_t, \\
+		h_t         & = o_t \odot \tanh(c_t).
+	\end{aligned}
 \]
 Смысл gating-механизма состоит в управляемом обновлении памяти: вентиль забывания $f_t$ определяет, какая часть прежнего состояния $c_{t-1}$ сохраняется, входной вентиль $i_t$ регулирует запись новой кандидатной информации $\tilde{c}_t$, а выходной вентиль $o_t$ задает, какая часть памяти становится видимой в скрытом состоянии $h_t$. Благодаря такому раздельному управлению LSTM может удерживать существенную информацию на нескольких шагах последовательности и подавлять нерелевантные обновления.
 Главное ограничение рекуррентного блока состоит в последовательной обработке токенов: шаг $t$ зависит от состояния шага $t-1$.
 Структура вычислений LSTM-ячейки показана на рисунке~\ref{fig:lstm-cell}.
 
 \begin{figure}[H]
-    \centering
-    \resizebox{\textwidth}{!}{%
-    \begin{tikzpicture}[
-        x=1cm,y=1cm,
-        font=\scriptsize,
-        layer/.style={draw, fill=white, rounded corners=2pt, minimum width=1.05cm, minimum height=0.70cm, align=center, inner sep=2pt},
-        op/.style={circle, draw, fill=white, minimum size=0.56cm, inner sep=0pt, align=center},
-        tensor/.style={draw, rounded corners=2pt, fill=white, minimum width=1.05cm, minimum height=0.52cm, align=center, inner sep=2pt},
-        arrow/.style={-{Latex[length=2.0mm]}, thick},
-        signal/.style={thick}
-    ]
-        \node[tensor] (hprev) at (-2.35,-1.60) {$h_{t-1}$};
-        \node[tensor] (zt) at (-2.35,-2.40) {$z_t$};
-        \node[tensor, minimum width=1.40cm] (concat) at (-0.55,-2.00) {$[h_{t-1}, z_t]$};
+	\centering
+	\resizebox{\textwidth}{!}{%
+		\begin{tikzpicture}[
+			x=1cm,y=1cm,
+			font=\scriptsize,
+			layer/.style={draw, fill=white, rounded corners=2pt, minimum width=1.05cm, minimum height=0.70cm, align=center, inner sep=2pt},
+			op/.style={circle, draw, fill=white, minimum size=0.56cm, inner sep=0pt, align=center},
+			tensor/.style={draw, rounded corners=2pt, fill=white, minimum width=1.05cm, minimum height=0.52cm, align=center, inner sep=2pt},
+			arrow/.style={-{Latex[length=2.0mm]}, thick},
+			signal/.style={thick}
+			]
+			\node[tensor] (hprev) at (-2.35,-1.60) {$h_{t-1}$};
+			\node[tensor] (zt) at (-2.35,-2.40) {$z_t$};
+			\node[tensor, minimum width=1.40cm] (concat) at (-0.55,-2.00) {$[h_{t-1}, z_t]$};
 
-        \node[layer] (fg) at (0.80,-0.85) {$\sigma$\\$f_t$};
-        \node[layer] (ig) at (2.90,-0.85) {$\sigma$\\$i_t$};
-        \node[layer] (cg) at (4.30,-0.85) {$\tanh$\\$\tilde{c}_t$};
-        \node[layer] (og) at (7.20,-0.85) {$\sigma$\\$o_t$};
+			\node[layer] (fg) at (0.80,-0.85) {$\sigma$\\$f_t$};
+			\node[layer] (ig) at (2.90,-0.85) {$\sigma$\\$i_t$};
+			\node[layer] (cg) at (4.30,-0.85) {$\tanh$\\$\tilde{c}_t$};
+			\node[layer] (og) at (7.20,-0.85) {$\sigma$\\$o_t$};
 
-        \node[op] (mulf) at (0.80,1.20) {$\times$};
-        \node[op] (muli) at (3.60,0.55) {$\times$};
-        \node[op] (add) at (5.45,1.20) {$+$};
-        \node[layer, minimum width=1.05cm, minimum height=0.54cm] (tanhc) at (7.15,0.48) {$\tanh$};
-        \node[op] (mulo) at (8.85,0.10) {$\times$};
+			\node[op] (mulf) at (0.80,1.20) {$\times$};
+			\node[op] (muli) at (3.60,0.55) {$\times$};
+			\node[op] (add) at (5.45,1.20) {$+$};
+			\node[layer, minimum width=1.05cm, minimum height=0.54cm] (tanhc) at (7.15,0.48) {$\tanh$};
+			\node[op] (mulo) at (8.85,0.10) {$\times$};
 
-        \draw[arrow] (hprev.east) -- ++(0.28,0) |- ([yshift=0.12cm]concat.west);
-        \draw[arrow] (zt.east) -- ++(0.28,0) |- ([yshift=-0.12cm]concat.west);
-        \draw[signal] (concat.east) -- (7.95,-2.00);
-        \draw[arrow] (0.80,-2.00) -- (fg.south);
-        \draw[arrow] (2.90,-2.00) -- (ig.south);
-        \draw[arrow] (4.30,-2.00) -- (cg.south);
-        \draw[arrow] (7.20,-2.00) -- (og.south);
+			\draw[arrow] (hprev.east) -- ++(0.28,0) |- ([yshift=0.12cm]concat.west);
+			\draw[arrow] (zt.east) -- ++(0.28,0) |- ([yshift=-0.12cm]concat.west);
+			\draw[signal] (concat.east) -- (7.95,-2.00);
+			\draw[arrow] (0.80,-2.00) -- (fg.south);
+			\draw[arrow] (2.90,-2.00) -- (ig.south);
+			\draw[arrow] (4.30,-2.00) -- (cg.south);
+			\draw[arrow] (7.20,-2.00) -- (og.south);
 
-        \draw[arrow] (-1.25,1.20) node[left] {$c_{t-1}$} -- (mulf);
-        \draw[arrow] (fg) -- (mulf);
-        \draw[arrow] (mulf) -- (add);
-        \draw[arrow] (ig) -- (muli);
-        \draw[arrow] (cg) -- (muli);
-        \draw[arrow] (muli) -- (add);
-        \draw[arrow] (add) -- (10.25,1.20) node[right] {$c_t$};
-        \draw[arrow] (7.15,1.20) -- (tanhc.north);
-        \draw[arrow] (tanhc.east) -- (mulo.west);
-        \draw[arrow] (og.east) -| (mulo.south);
-        \draw[arrow] (mulo) -- (10.25,0.10) node[right] {$h_t$};
-    \end{tikzpicture}%
-    }
-    \caption{Блок-схема LSTM-ячейки}
-    \label{fig:lstm-cell}
+			\draw[arrow] (-1.25,1.20) node[left] {$c_{t-1}$} -- (mulf);
+			\draw[arrow] (fg) -- (mulf);
+			\draw[arrow] (mulf) -- (add);
+			\draw[arrow] (ig) -- (muli);
+			\draw[arrow] (cg) -- (muli);
+			\draw[arrow] (muli) -- (add);
+			\draw[arrow] (add) -- (10.25,1.20) node[right] {$c_t$};
+			\draw[arrow] (7.15,1.20) -- (tanhc.north);
+			\draw[arrow] (tanhc.east) -- (mulo.west);
+			\draw[arrow] (og.east) -| (mulo.south);
+			\draw[arrow] (mulo) -- (10.25,0.10) node[right] {$h_t$};
+		\end{tikzpicture}%
+	}
+	\caption{Блок-схема LSTM-ячейки}
+	\label{fig:lstm-cell}
 \end{figure}
 
 В классической seq2seq-схеме перевода encoder на основе LSTM последовательно обрабатывает исходное предложение и передает decoder последнее скрытое состояние как контекстный вектор~\cite{seq2seq}. Такая схема связывает качество перевода с тем, насколько один вектор способен сохранить информацию обо всей входной последовательности, что особенно ограничивает модель на длинных предложениях.
@@ -82,8 +82,8 @@ LSTM является рекуррентной архитектурой, пре�
 Для уменьшения зависимости decoder от единственного контекстного вектора был предложен механизм внимания, или attention~\cite{luong,transformer}. Он дает модели прямой доступ к набору представлений encoder, поэтому информация об исходном предложении не должна полностью сжиматься в последнее скрытое состояние.
 В общем виде attention можно описать через три набора векторов: запросы $Q$, ключи $K$ и значения $V$. Запрос определяет, какая информация требуется текущей позиции, ключи используются для вычисления близости с другими позициями, а значения усредняются с весами, полученными после нормализации этих близостей. В варианте, используемом в Transformer, веса вычисляются по скалярному произведению запросов и ключей:
 \[
-    \operatorname{Attention}(Q, K, V) =
-    \operatorname{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V,
+	\operatorname{Attention}(Q, K, V) =
+	\operatorname{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V,
 \]
 где $d_k$ --- размерность ключей, а результатом является взвешенная сумма значений $V$.
 В self-attention запросы, ключи и значения строятся из одной и той же последовательности, поэтому токены внутри предложения обмениваются информацией друг с другом.
@@ -91,111 +91,148 @@ LSTM является рекуррентной архитектурой, пре�
 Схема вычисления attention приведена на рисунке~\ref{fig:scaled-dot-product-attention}.
 
 \begin{figure}[H]
-    \centering
-    \resizebox{0.95\textwidth}{!}{%
-    \begin{tikzpicture}[
-        x=1cm,y=1cm,
-        font=\scriptsize,
-        block/.style={draw, fill=white, rounded corners=2pt, minimum height=0.60cm, align=center, inner sep=3pt},
-        op/.style={circle, draw, fill=white, minimum size=0.58cm, inner sep=0pt, align=center},
-        tensor/.style={draw, rounded corners=2pt, fill=white, minimum width=0.85cm, minimum height=0.50cm, align=center, inner sep=2pt},
-        arrow/.style={-{Latex[length=2.0mm]}, thick}
-    ]
-        \node[tensor] (q) at (0.0,0.80) {$Q$};
-        \node[tensor] (k) at (0.0,-0.80) {$K$};
-        \node[op] (dot) at (1.50,0.00) {$\cdot$};
-        \node[block, minimum width=1.75cm] (scores) at (3.30,0.00) {$\dfrac{QK^T}{\sqrt{d_k}}$};
-        \node[op] (add) at (5.10,0.00) {$+$};
-        \node[tensor] (mask) at (5.10,1.20) {mask};
-        \node[block, minimum width=1.35cm] (softmax) at (6.90,0.00) {$\operatorname{softmax}$};
-        \node[op] (mulv) at (8.70,0.00) {$\times$};
-        \node[tensor] (v) at (8.70,-1.20) {$V$};
-        \node[tensor, minimum width=1.05cm] (out) at (10.50,0.00) {выход};
+	\centering
+	\resizebox{0.95\textwidth}{!}{%
+		\begin{tikzpicture}[
+			x=1cm,y=1cm,
+			font=\scriptsize,
+			block/.style={draw, fill=white, rounded corners=2pt, minimum height=0.60cm, align=center, inner sep=3pt},
+			op/.style={circle, draw, fill=white, minimum size=0.58cm, inner sep=0pt, align=center},
+			tensor/.style={draw, rounded corners=2pt, fill=white, minimum width=0.85cm, minimum height=0.50cm, align=center, inner sep=2pt},
+			arrow/.style={-{Latex[length=2.0mm]}, thick}
+			]
+			\node[tensor] (q) at (0.0,0.80) {$Q$};
+			\node[tensor] (k) at (0.0,-0.80) {$K$};
+			\node[op] (dot) at (1.50,0.00) {$\cdot$};
+			\node[block, minimum width=1.75cm] (scores) at (3.30,0.00) {$\dfrac{QK^T}{\sqrt{d_k}}$};
+			\node[op] (add) at (5.10,0.00) {$+$};
+			\node[tensor] (mask) at (5.10,1.20) {mask};
+			\node[block, minimum width=1.35cm] (softmax) at (6.90,0.00) {$\operatorname{softmax}$};
+			\node[op] (mulv) at (8.70,0.00) {$\times$};
+			\node[tensor] (v) at (8.70,-1.20) {$V$};
+			\node[tensor, minimum width=1.05cm] (out) at (10.50,0.00) {выход};
 
-        \draw[arrow] (q) -- (dot);
-        \draw[arrow] (k) -- (dot);
-        \draw[arrow] (dot) -- (scores);
-        \draw[arrow] (scores) -- (add);
-        \draw[arrow] (mask) -- (add);
-        \draw[arrow] (add) -- (softmax);
-        \draw[arrow] (softmax) -- (mulv);
-        \draw[arrow] (v) -- (mulv);
-        \draw[arrow] (mulv) -- (out);
-    \end{tikzpicture}%
-    }
-    \caption{Схема вычисления attention}
-    \label{fig:scaled-dot-product-attention}
+			\draw[arrow] (q) -- (dot);
+			\draw[arrow] (k) -- (dot);
+			\draw[arrow] (dot) -- (scores);
+			\draw[arrow] (scores) -- (add);
+			\draw[arrow] (mask) -- (add);
+			\draw[arrow] (add) -- (softmax);
+			\draw[arrow] (softmax) -- (mulv);
+			\draw[arrow] (v) -- (mulv);
+			\draw[arrow] (mulv) -- (out);
+		\end{tikzpicture}%
+	}
+	\caption{Схема вычисления attention}
+	\label{fig:scaled-dot-product-attention}
 \end{figure}
 
 Одна attention-операция формирует единое взвешенное представление контекста, из-за чего разные типы зависимостей между токенами могут смешиваться. Например, в одном представлении могут одновременно требоваться локальные связи между соседними словами, дальние синтаксические зависимости и соответствия между словами исходного предложения и перевода. Для параллельного учета таких зависимостей было предложено ``многоголовое'' внимание: в этом механизме вычисления разбиваются на несколько параллельных attention-голов:
 \[
-    \operatorname{MHA}(Q,K,V) = \operatorname{Concat}(head_1, \ldots, head_H)W^O,
+	\operatorname{MHA}(Q,K,V) = \operatorname{Concat}(head_1, \ldots, head_H)W^O,
 \]
 Каждая голова имеет собственные проекции $Q$, $K$ и $V$.
 За счет этого модель одновременно учитывает разные типы связей между токенами.
 Структура multi-head attention представлена на рисунке~\ref{fig:multi-head-attention}.
 
 \begin{figure}[H]
-    \centering
-    \resizebox{0.88\textwidth}{!}{%
-    \begin{tikzpicture}[
-        x=1cm,y=1cm,
-        font=\scriptsize,
-        block/.style={draw, fill=white, rounded corners=2pt, minimum height=0.64cm, align=center, inner sep=3pt},
-        head/.style={draw, fill=white, rounded corners=3pt, text width=2.20cm, minimum height=0.86cm, align=center, inner sep=3pt},
-        tensor/.style={draw, rounded corners=2pt, fill=white, minimum width=0.95cm, minimum height=0.50cm, align=center, inner sep=2pt},
-        arrow/.style={-{Latex[length=2.0mm]}, thick}
-    ]
-        \node[tensor] (xq) at (0.0,1.10) {$X_Q$};
-        \node[tensor] (xk) at (0.0,0.00) {$X_K$};
-        \node[tensor] (xv) at (0.0,-1.10) {$X_V$};
+	\centering
+	\resizebox{0.88\textwidth}{!}{%
+		\begin{tikzpicture}[
+			x=1cm,y=1cm,
+			font=\scriptsize,
+			block/.style={draw, fill=white, rounded corners=2pt, minimum height=0.64cm, align=center, inner sep=3pt},
+			head/.style={draw, fill=white, rounded corners=3pt, text width=2.20cm, minimum height=0.86cm, align=center, inner sep=3pt},
+			tensor/.style={draw, rounded corners=2pt, fill=white, minimum width=0.95cm, minimum height=0.50cm, align=center, inner sep=2pt},
+			arrow/.style={-{Latex[length=2.0mm]}, thick}
+			]
+			\node[tensor] (xq) at (0.0,1.10) {$X_Q$};
+			\node[tensor] (xk) at (0.0,0.00) {$X_K$};
+			\node[tensor] (xv) at (0.0,-1.10) {$X_V$};
 
-        \node[block, text width=3.20cm, minimum height=2.70cm] (proj) at (2.85,0.0)
-            {$[Q_1,\ldots,Q_H]=X_QW^Q$\\[2pt]
-             $[K_1,\ldots,K_H]=X_KW^K$\\[2pt]
-             $[V_1,\ldots,V_H]=X_VW^V$};
+			\node[block, text width=3.20cm, minimum height=2.70cm] (proj) at (2.85,0.0)
+			{$[Q_1,\ldots,Q_H]=X_QW^Q$\\[2pt]
+				$[K_1,\ldots,K_H]=X_KW^K$\\[2pt]
+				$[V_1,\ldots,V_H]=X_VW^V$};
 
-        \node[head] (h1) at (7.20,1.45) {$head_1$\\$\operatorname{Attn}$\\$(Q_1,K_1,V_1)$};
-        \node[head] (h2) at (7.20,0.00) {$head_2$\\$\operatorname{Attn}$\\$(Q_2,K_2,V_2)$};
-        \node[head] (hh) at (7.20,-1.45) {$head_H$\\$\operatorname{Attn}$\\$(Q_H,K_H,V_H)$};
-        \node at (7.20,-0.72) {$\vdots$};
+			\node[head] (h1) at (7.20,1.45) {$head_1$\\$\operatorname{Attn}$\\$(Q_1,K_1,V_1)$};
+			\node[head] (h2) at (7.20,0.00) {$head_2$\\$\operatorname{Attn}$\\$(Q_2,K_2,V_2)$};
+			\node[head] (hh) at (7.20,-1.45) {$head_H$\\$\operatorname{Attn}$\\$(Q_H,K_H,V_H)$};
+			\node at (7.20,-0.72) {$\vdots$};
 
-        \coordinate (split) at ($(proj.east)+(0.90,0)$);
-        \coordinate (merge) at ($(h2.east)+(h2.west)-(split)$);
-        \node[block, anchor=west, minimum width=1.05cm] (concat) at ($(merge)+(0.90,0)$) {Concat};
-        \node[block, anchor=west, text width=1.30cm] (wo) at ($(concat.east)+(0.65,0)$) {$W^O$};
-        \node[tensor, anchor=west] (out) at ($(wo.east)+(0.65,0)$) {выход};
+			\coordinate (split) at ($(proj.east)+(0.90,0)$);
+			\coordinate (merge) at ($(h2.east)+(h2.west)-(split)$);
+			\node[block, anchor=west, minimum width=1.05cm] (concat) at ($(merge)+(0.90,0)$) {Concat};
+			\node[block, anchor=west, text width=1.30cm] (wo) at ($(concat.east)+(0.65,0)$) {$W^O$};
+			\node[tensor, anchor=west] (out) at ($(wo.east)+(0.65,0)$) {выход};
 
-        \draw[arrow] (xq.east) -- (proj.west |- xq.east);
-        \draw[arrow] (xk.east) -- (proj.west);
-        \draw[arrow] (xv.east) -- (proj.west |- xv.east);
+			\draw[arrow] (xq.east) -- (proj.west |- xq.east);
+			\draw[arrow] (xk.east) -- (proj.west);
+			\draw[arrow] (xv.east) -- (proj.west |- xv.east);
 
-        \draw[thick] (proj.east) -- (split);
-        \draw[thick] (split |- h1.west) -- (split |- hh.west);
-        \draw[arrow] (split |- h1.west) -- (h1.west);
-        \draw[arrow] (split) -- (h2.west);
-        \draw[arrow] (split |- hh.west) -- (hh.west);
+			\draw[thick] (proj.east) -- (split);
+			\draw[thick] (split |- h1.west) -- (split |- hh.west);
+			\draw[arrow] (split |- h1.west) -- (h1.west);
+			\draw[arrow] (split) -- (h2.west);
+			\draw[arrow] (split |- hh.west) -- (hh.west);
 
-        \draw[thick] (h1.east) -- (merge |- h1.east);
-        \draw[thick] (h2.east) -- (merge);
-        \draw[thick] (hh.east) -- (merge |- hh.east);
-        \draw[thick] (merge |- h1.east) -- (merge |- hh.east);
-        \draw[arrow] (merge) -- (concat.west);
-        \draw[arrow] (concat) -- (wo);
-        \draw[arrow] (wo) -- (out);
-    \end{tikzpicture}%
-    }
-    \caption{Блок-схема multi-head attention}
-    \label{fig:multi-head-attention}
+			\draw[thick] (h1.east) -- (merge |- h1.east);
+			\draw[thick] (h2.east) -- (merge);
+			\draw[thick] (hh.east) -- (merge |- hh.east);
+			\draw[thick] (merge |- h1.east) -- (merge |- hh.east);
+			\draw[arrow] (merge) -- (concat.west);
+			\draw[arrow] (concat) -- (wo);
+			\draw[arrow] (wo) -- (out);
+		\end{tikzpicture}%
+	}
+	\caption{Блок-схема multi-head attention}
+	\label{fig:multi-head-attention}
 \end{figure}
 
 В self-attention выполняется $X_Q = X_K = X_V$.
 В cross-attention последовательность запросов $X_Q$ поступает из decoder, а $X_K$ и $X_V$ строятся по выходам encoder.
 
+Self-attention не содержит встроенного порядка токенов. Если к входным векторам не добавить информацию о позиции, слой attention обрабатывает последовательность как набор элементов: перестановка токенов приводит к той же перестановке выходных представлений. Поэтому Transformer использует позиционные представления, которые передают номер токена в последовательности.
+
+В оригинальной архитектуре Transformer применяется absolute positional encoding~\cite{transformer}. Для позиции $pos$ и координаты $i$ задаются синусоидальные признаки:
+\[
+	\begin{aligned}
+		PE_{pos,2i}   & = \sin\left(\frac{pos}{10000^{2i/d_{model}}}\right), \\
+		PE_{pos,2i+1} & = \cos\left(\frac{pos}{10000^{2i/d_{model}}}\right),
+	\end{aligned}
+\]
+где $d_{model}$ --- размерность векторного представления.
+Полученный позиционный вектор имеет ту же размерность, что и embedding токена, и складывается с ним перед подачей в первый слой модели:
+\[
+	x_{pos} = e_{pos} + PE_{pos}.
+\]
+Такая схема передает в модель абсолютный номер позиции, а синусоидальная форма задает разные частоты по координатам вектора.
+
+Вместо абсолютной позиции в модель можно передавать информацию об относительной позиции. Так, например, работает rotary positional embeddings (RoPE)~\cite{rope}. В RoPE позиционный вектор не прибавляется к embedding. Вместо этого позиция задает поворот пар координат векторов query и key перед вычислением attention. Для пары координат $(x_{2i}, x_{2i+1})$ преобразование можно записать как
+\[
+	\begin{pmatrix}
+		x'_{2i} \\
+		x'_{2i+1}
+	\end{pmatrix}
+	=
+	\begin{pmatrix}
+		\cos(pos\,\theta_i) & -\sin(pos\,\theta_i) \\
+		\sin(pos\,\theta_i) & \cos(pos\,\theta_i)
+	\end{pmatrix}
+	\begin{pmatrix}
+		x_{2i} \\
+		x_{2i+1}
+	\end{pmatrix},
+\]
+где $\theta_i$ задает частоту для соответствующей пары координат.
+Так как поворот применяется к $Q$ и $K$, позиционная информация попадает непосредственно в скалярные произведения, по которым вычисляются attention-веса.
+Скалярное произведение повернутых векторов зависит не только от их содержания, но и от расстояния между позициями.
+Поэтому RoPE вводит относительную позиционную информацию без отдельного добавления позиционного embedding к входу.
+
 Self-attention дает прямой доступ к другим позициям последовательности, но требует вычисления попарных связей между токенами. Из-за этого время и память растут квадратично с длиной последовательности, что становится ограничением при работе с длинными контекстами. Mamba была предложена как альтернатива attention-блокам: она относится к моделям пространства состояний с избирательным обновлением состояния~\cite{mamba}.
 В упрощенном виде такой блок можно записать как
 \[
-    s_t = A_t s_{t-1} + B_t z_t, \qquad r_t = C_t s_t,
+	s_t = A_t s_{t-1} + B_t z_t, \qquad r_t = C_t s_t,
 \]
 где $s_t$ --- скрытое состояние, $z_t$ --- входной вектор, а $r_t$ --- выход блока.
 Ключевая особенность Mamba --- зависимость параметров обновления от текущего входа, за счет которой модель избирательно сохраняет или забывает информацию.
@@ -203,52 +240,52 @@ Self-attention дает прямой доступ к другим позиция
 Основные вычислительные ветви Mamba-блока показаны на рисунке~\ref{fig:mamba-block}.
 
 \begin{figure}[H]
-    \centering
-    \resizebox{0.95\textwidth}{!}{%
-    \begin{tikzpicture}[
-        x=1cm,y=1cm,
-        font=\scriptsize,
-        proj/.style={trapezium, trapezium left angle=70, trapezium right angle=110, draw, fill=white, minimum width=1.75cm, minimum height=0.62cm, align=center, inner sep=2pt},
-        trans/.style={draw, fill=white, minimum width=1.35cm, minimum height=0.62cm, align=center, inner sep=2pt},
-        act/.style={circle, draw, fill=white, minimum size=0.62cm, inner sep=0pt, align=center},
-        tensor/.style={draw, rounded corners=2pt, fill=white, minimum width=0.85cm, minimum height=0.50cm, align=center, inner sep=2pt},
-        arrow/.style={-{Latex[length=2.0mm]}, thick},
-        line/.style={thick}
-    ]
-        \node[tensor] (inp) at (0.00,0.00) {вход};
-        \coordinate (split) at (1.25,0.00);
+	\centering
+	\resizebox{0.95\textwidth}{!}{%
+		\begin{tikzpicture}[
+			x=1cm,y=1cm,
+			font=\scriptsize,
+			proj/.style={trapezium, trapezium left angle=70, trapezium right angle=110, draw, fill=white, minimum width=1.75cm, minimum height=0.62cm, align=center, inner sep=2pt},
+			trans/.style={draw, fill=white, minimum width=1.35cm, minimum height=0.62cm, align=center, inner sep=2pt},
+			act/.style={circle, draw, fill=white, minimum size=0.62cm, inner sep=0pt, align=center},
+			tensor/.style={draw, rounded corners=2pt, fill=white, minimum width=0.85cm, minimum height=0.50cm, align=center, inner sep=2pt},
+			arrow/.style={-{Latex[length=2.0mm]}, thick},
+			line/.style={thick}
+			]
+			\node[tensor] (inp) at (0.00,0.00) {вход};
+			\coordinate (split) at (1.25,0.00);
 
-        \node[proj] (pin1) at (2.80,1.20) {Projection};
-        \node[trans] (conv) at (5.15,1.20) {Conv};
-        \node[act] (silu1) at (6.60,1.20) {$\sigma$};
-        \node[trans] (ssm) at (8.05,1.20) {SSM};
-        \node[act] (mul) at (9.50,1.20) {$\times$};
-        \node[proj] (pout) at (11.30,1.20) {Projection};
-        \node[tensor] (out) at (13.35,1.20) {выход};
+			\node[proj] (pin1) at (2.80,1.20) {Projection};
+			\node[trans] (conv) at (5.15,1.20) {Conv};
+			\node[act] (silu1) at (6.60,1.20) {$\sigma$};
+			\node[trans] (ssm) at (8.05,1.20) {SSM};
+			\node[act] (mul) at (9.50,1.20) {$\times$};
+			\node[proj] (pout) at (11.30,1.20) {Projection};
+			\node[tensor] (out) at (13.35,1.20) {выход};
 
-        \node[proj] (pin2) at (2.80,-1.20) {Projection};
-        \node[act] (silu2) at (6.60,-1.20) {$\sigma$};
-        \coordinate (gate) at (9.50,-1.20);
+			\node[proj] (pin2) at (2.80,-1.20) {Projection};
+			\node[act] (silu2) at (6.60,-1.20) {$\sigma$};
+			\coordinate (gate) at (9.50,-1.20);
 
-        \draw[arrow] (inp.east) -- (split);
-        \draw[line] (split |- pin1.west) -- (split |- pin2.west);
-        \draw[arrow] (split |- pin1.west) -- (pin1.west);
-        \draw[arrow] (split |- pin2.west) -- (pin2.west);
+			\draw[arrow] (inp.east) -- (split);
+			\draw[line] (split |- pin1.west) -- (split |- pin2.west);
+			\draw[arrow] (split |- pin1.west) -- (pin1.west);
+			\draw[arrow] (split |- pin2.west) -- (pin2.west);
 
-        \draw[arrow] (pin1.east) -- (conv.west);
-        \draw[arrow] (conv.east) -- (silu1.west);
-        \draw[arrow] (silu1.east) -- (ssm.west);
-        \draw[arrow] (ssm.east) -- (mul.west);
-        \draw[arrow] (mul.east) -- (pout.west);
-        \draw[arrow] (pout.east) -- (out.west);
+			\draw[arrow] (pin1.east) -- (conv.west);
+			\draw[arrow] (conv.east) -- (silu1.west);
+			\draw[arrow] (silu1.east) -- (ssm.west);
+			\draw[arrow] (ssm.east) -- (mul.west);
+			\draw[arrow] (mul.east) -- (pout.west);
+			\draw[arrow] (pout.east) -- (out.west);
 
-        \draw[arrow] (pin2.east) -- (silu2.west);
-        \draw[line] (silu2.east) -- (gate);
-        \draw[arrow] (gate) -- (mul.south);
-    \end{tikzpicture}%
-    }
-    \caption{Блок-схема Mamba-блока}
-    \label{fig:mamba-block}
+			\draw[arrow] (pin2.east) -- (silu2.west);
+			\draw[line] (silu2.east) -- (gate);
+			\draw[arrow] (gate) -- (mul.south);
+		\end{tikzpicture}%
+	}
+	\caption{Блок-схема Mamba-блока}
+	\label{fig:mamba-block}
 \end{figure}
 
 
@@ -261,19 +298,19 @@ Self-attention дает прямой доступ к другим позиция
 В принятой постановке исходная последовательность имеет вид $x = (x_1, \ldots, x_m)$, а целевая последовательность --- $y = (y_1, \ldots, y_n)$.
 Encoder преобразует исходные токены в набор скрытых представлений:
 \[
-    H = (h_1, \ldots, h_m) = \operatorname{Enc}_{\phi}(x_1, \ldots, x_m),
+	H = (h_1, \ldots, h_m) = \operatorname{Enc}_{\phi}(x_1, \ldots, x_m),
 \]
 где $H$ можно рассматривать как память модели об исходном предложении.
 Decoder строит распределение следующего целевого токена, используя уже построенный префикс перевода и представления encoder:
 \[
-    \pi_t = \operatorname{Dec}_{\psi}(y_{<t}, H),
-    \qquad
-    p_{\theta}(y_t \mid y_{<t}, x) = \pi_t(y_t),
+	\pi_t = \operatorname{Dec}_{\psi}(y_{<t}, H),
+	\qquad
+	p_{\theta}(y_t \mid y_{<t}, x) = \pi_t(y_t),
 \]
 где $\theta = (\phi, \psi)$ --- параметры всей модели.
 Тогда условная вероятность перевода записывается как
 \[
-    p_{\theta}(y \mid x) = \prod_{t=1}^{n} p_{\theta}(y_t \mid y_{<t}, x).
+	p_{\theta}(y \mid x) = \prod_{t=1}^{n} p_{\theta}(y_t \mid y_{<t}, x).
 \]
 
 В такой формулировке encoder отвечает за представление исходного текста, а decoder --- за построение перевода.
@@ -287,13 +324,13 @@ Decoder строит распределение следующего целев�
 Исходное предложение и целевой перевод записываются в одну авторегрессионную последовательность.
 Например, можно задать префикс
 \[
-    q(x) = (\langle src \rangle, x_1, \ldots, x_m, \langle tgt \rangle),
+	q(x) = (\langle src \rangle, x_1, \ldots, x_m, \langle tgt \rangle),
 \]
 после которого модель должна продолжить последовательность токенами перевода.
 Условная вероятность в этом случае имеет вид
 \[
-    p_{\theta}(y \mid x) =
-    \prod_{t=1}^{n} p_{\theta}(y_t \mid q(x), y_{<t}).
+	p_{\theta}(y \mid x) =
+	\prod_{t=1}^{n} p_{\theta}(y_t \mid q(x), y_{<t}).
 \]
 
 В этой схеме используется каузальная маска: каждый токен может обращаться только к предыдущим токенам общей последовательности.

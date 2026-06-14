@@ -100,7 +100,7 @@ AdamW представляет собой модификацию Adam, в кот
 При использовании label smoothing вместо one-hot распределения применяется сглаженное целевое распределение, что уменьшает чрезмерную уверенность модели в одном токене.
 В экспериментах регуляризация включает три независимых механизма: dropout, сглаживание целевых меток и ограничение величины весов через оптимизатор.
 
-В современных практиках обучения модели используют не постоянный learning rate. Закон, по которому меняется learning rate, называется ``расписанием''.
+В современных практиках обучения моделей используют не постоянный learning rate. Закон, по которому меняется learning rate, называется ``расписанием''.
 Выбором расписания, как правило, устраняют эмпирически установленные недостатки различных стадий обучения модели.
 Например, на самом старте обучения, когда веса модели ``далеко'' от оптимальных, градиент слишком велик, и оптимизация модели слишком нестабильна из-за проблемы ``градиентного взрыва''.
 В таком случае лучше иметь меньший learning rate. Поскольку увеличение размера модели обычно усиливает нестабильность во время обучения, выставление расписания или уменьшения learning rate становится обязательным.
@@ -154,3 +154,150 @@ AdamW представляет собой модификацию Adam, в кот
 Второе допущение состоит в том, что большинство гиперпараметров можно подбирать последовательно. В этом случае сначала фиксируется базовая конфигурация, затем изменяется один параметр или небольшая группа связанных параметров, после чего выбранное значение используется в следующих запусках. Такой подход не гарантирует нахождение глобального оптимума, однако позволяет оценить влияние отдельных решений без полного перебора всех комбинаций.
 
 Некоторые параметры нельзя считать независимыми. Learning rate связан с размером batch: при изменении числа примеров в одном шаге меняется шум градиента и масштаб обновлений. Параметры warmup также рассматриваются совместно, поскольку число warmup-steps и начальное значение learning rate определяют одну и ту же начальную фазу оптимизации. Hidden size, число слоев и размер обучающего набора связаны через емкость модели: увеличение глубины или ширины без достаточного объема данных может усиливать переобучение, а слишком малая модель может не использовать преимущества большего корпуса. Поэтому такие параметры подбираются не по отдельности, а как связанные группы.
+
+\subsection{Эксперименты с токенизатором}
+
+TODO
+
+\subsection{Эксперименты с параметрами обучения}
+
+TODO
+
+\subsection{Эксперименты с параметрами моделей}
+
+TODO
+
+\subsection{Обучение лучшей конфигурации}
+
+После подбора гиперпараметров была обучена итоговая двуязычная модель перевода. В качестве архитектуры используется Transformer encoder-decoder с rotary positional embeddings. Модель содержит около 230 млн параметров и обучается на наибольшем подготовленном наборе данных в течение 10 эпох.
+
+Основные параметры итогового обучения приведены в таблице~\ref{tab:final-model-hparams}.
+
+\begin{table}[H]
+	\centering
+	\caption{Гиперпараметры итоговой модели}
+	\label{tab:final-model-hparams}
+	\begin{tabularx}{\textwidth}{|p{0.46\textwidth}|X|}
+		\hline
+		\textbf{Параметр}              & \textbf{Значение}                      \\
+		\hline
+		Архитектура                    & Transformer encoder-decoder с RoPE     \\
+		\hline
+		Число параметров               & 230 млн                                \\
+		\hline
+		Языковая постановка            & двуязычная модель ru--en               \\
+		\hline
+		Число слоев encoder и decoder  & 8 и 8                                  \\
+		\hline
+		Hidden size                    & 768                                    \\
+		\hline
+		Число attention-голов          & 12                                     \\
+		\hline
+		Число эпох                     & 10                                     \\
+		\hline
+		Batch size                     & 48                                     \\
+		\hline
+		Learning rate                  & 0{,}0003                               \\
+		\hline
+		Минимальный learning rate      & 0{,}00001                              \\
+		\hline
+		Начальный learning rate warmup & $0{,}01 \cdot lr$                      \\
+		\hline
+		Параметры AdamW                & $\beta_1 = 0{,}9$, $\beta_2 = 0{,}999$ \\
+		\hline
+		Label smoothing                & 0{,}1                                  \\
+		\hline
+		Dropout                        & 0{,}1                                  \\
+		\hline
+		Weight decay                   & 0{,}01                                 \\
+		\hline
+	\end{tabularx}
+\end{table}
+
+Во время обучения после каждой десятой части эпохи вычислялись значения validation loss, BLEU, chrF и COMET. Динамика BLEU, chrF и COMET на validation-наборе показана на рисунках~\ref{fig:final-validation-bleu}--\ref{fig:final-validation-comet}.
+
+\begin{figure}[H]
+	\centering
+	\begin{tikzpicture}
+		\begin{axis}[
+				width=0.9\textwidth,
+				height=0.42\textwidth,
+				xlabel={Шаг валидации},
+				ylabel={BLEU},
+				xmin=1,xmax=100,
+				grid=both,
+				major grid style={gray!30},
+				minor grid style={gray!15},
+			]
+			\addplot[blue, thick] table[x=step,y=bleu,col sep=comma] {csv/final_validation.csv};
+		\end{axis}
+	\end{tikzpicture}
+	\caption{Динамика BLEU итоговой модели на validation-наборе}
+	\label{fig:final-validation-bleu}
+\end{figure}
+
+\begin{figure}[H]
+	\centering
+	\begin{tikzpicture}
+		\begin{axis}[
+				width=0.9\textwidth,
+				height=0.42\textwidth,
+				xlabel={Шаг валидации},
+				ylabel={chrF},
+				xmin=1,xmax=100,
+				grid=both,
+				major grid style={gray!30},
+				minor grid style={gray!15},
+			]
+			\addplot[red, thick] table[x=step,y=chrf,col sep=comma] {csv/final_validation.csv};
+		\end{axis}
+	\end{tikzpicture}
+	\caption{Динамика chrF итоговой модели на validation-наборе}
+	\label{fig:final-validation-chrf}
+\end{figure}
+
+\begin{figure}[H]
+	\centering
+	\begin{tikzpicture}
+		\begin{axis}[
+				width=0.9\textwidth,
+				height=0.42\textwidth,
+				xlabel={Шаг валидации},
+				ylabel={COMET},
+				xmin=1,xmax=100,
+				grid=both,
+				major grid style={gray!30},
+				minor grid style={gray!15},
+			]
+			\addplot[black, thick] table[x=step,y=comet,col sep=comma] {csv/final_validation.csv};
+		\end{axis}
+	\end{tikzpicture}
+	\caption{Динамика COMET итоговой модели на validation-наборе}
+	\label{fig:final-validation-comet}
+\end{figure}
+
+На первых эпохах наблюдается быстрый рост BLEU, chrF и COMET, после чего улучшение становится более плавным. К концу обучения значения метрик выходят на плато, поэтому дальнейшее увеличение числа эпох без изменения данных или регуляризации не выглядит основным источником улучшения качества.
+
+Итоговая оценка выполнялась на тестовом наборе, который не использовался при подборе гиперпараметров. На test-наборе модель получила следующие значения: \textbf{BLEU} --- 32{,}25, \textbf{chrF} --- 60{,}34, \textbf{COMET} --- 0{,}8519.
+
+Примеры переводов итоговой модели приведены в таблице~\ref{tab:final-examples}.
+Модель успешно перевела даты в веках (с использованием римских цифр) в английский формат (12th, 13th), а также все остальные цифры.
+Были сохранены имена собственные и все знаки препинания.
+
+\begin{longtable}{|p{0.285\textwidth}|p{0.285\textwidth}|p{0.285\textwidth}|}
+	\caption{Примеры переводов итоговой модели}\label{tab:final-examples}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           \\
+	\hline
+	\textbf{Исходное предложение}                                                                                                                                                                                     & \textbf{Reference}                                                                                                                                                                                    & \textbf{Перевод модели}                                                                                                                                                                             \\
+	\hline
+	\endfirsthead
+	\hline
+	\textbf{Исходное предложение}                                                                                                                                                                                     & \textbf{Reference}                                                                                                                                                                                    & \textbf{Перевод модели}                                                                                                                                                                             \\
+	\hline
+	\endhead
+	Эпоху, в которой происходили данные события, принято называть Высоким Средневековьем, периодом европейской истории, затрагивающим XI, XII и XIII века (1000--1300 гг. н. э.).                                     & The age where the events took place is commonly referred as the High Middle Ages the period of European history in the 11th, 12th, and 13th centuries (AD 1000--1300).                                & The era in which these events occurred is called the High Middle Ages, a period of European history covering the 11th, 12th, and 13th centuries (1000--1300 AD).                                    \\
+	\hline
+	В 1683 году силы династии Цин (1644--1912) взяли под контроль западные и северные прибрежные районы Тайваня и в 1885 году объявили Тайвань провинцией империи Цин.                                                & In 1683, Qing dynasty (1644--1912) forces take control of Taiwan's western and northern coastal areas and declared Taiwan as a province of the Qing Empire in 1885.                                   & In 1683, the Qing Dynasty (1644--1912) took control of Taiwan's western and northern coastal areas and declared Taiwan a province of the Qing Empire in 1885.                                       \\
+	\hline
+	В 1994 году этот конфликт привёл к созданию на востоке Молдовы самопровозглашённой Приднестровской республики, которая имеет собственное правительство и валюту, но не признана ни одним государством-членом ООН. & In 1994, this conflict led to the creation of the self-proclaimed Transnistria Republic in eastern Moldova, which has its own government and currency but is not recognised by any UN member country. & In 1994, this conflict led to the creation of a self-proclaimed Transnistrian republic in eastern Moldova, which has its own government and currency, but is not recognized by any UN member state. \\
+	\hline
+\end{longtable}
