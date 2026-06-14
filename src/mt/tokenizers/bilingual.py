@@ -3,11 +3,11 @@ from typing import Iterator, Optional, Self
 
 from tokenizers import Encoding, Tokenizer
 from tokenizers.decoders import Metaspace as MetaspaceDecoder
-from tokenizers.models import Unigram
+from tokenizers.models import BPE, Unigram, WordPiece
 from tokenizers.normalizers import NFKC
 from tokenizers.pre_tokenizers import Digits, Metaspace, Punctuation, Sequence
 from tokenizers.processors import TemplateProcessing
-from tokenizers.trainers import Trainer, UnigramTrainer
+from tokenizers.trainers import BpeTrainer, Trainer, UnigramTrainer, WordPieceTrainer
 
 
 class BilingualBaseTokenizer:
@@ -171,6 +171,44 @@ class BilingualUnigramTokenizer(BilingualBaseTokenizer):
             vocab_size=vocab_size,
             show_progress=show_progress,
             unk_token=self.unk_token,
+            special_tokens=[
+                self.pad_token,
+                self.bos_token,
+                self.eos_token,
+                self.unk_token,
+                self.ru_target_token,
+                self.en_target_token,
+            ],
+        )
+
+
+class BilingualBpeTokenizer(BilingualBaseTokenizer):
+    def _create_model(self):
+        return BPE()
+
+    def _create_trainer(self, vocab_size: int = 32000, show_progress: bool = True) -> Trainer:
+        return BpeTrainer(
+            vocab_size=vocab_size,
+            show_progress=show_progress,
+            special_tokens=[
+                self.pad_token,
+                self.bos_token,
+                self.eos_token,
+                self.unk_token,
+                self.ru_target_token,
+                self.en_target_token,
+            ],
+        )
+
+
+class BilingualWordPieceTokenizer(BilingualBaseTokenizer):
+    def _create_model(self):
+        return WordPiece()
+
+    def _create_trainer(self, vocab_size: int = 32000, show_progress: bool = True) -> Trainer:
+        return WordPieceTrainer(
+            vocab_size=vocab_size,
+            show_progress=show_progress,
             special_tokens=[
                 self.pad_token,
                 self.bos_token,

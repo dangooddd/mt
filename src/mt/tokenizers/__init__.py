@@ -1,5 +1,10 @@
 from .base import BaseTokenizer, BpeTokenizer, UnigramTokenizer, WordPieceTokenizer
-from .bilingual import BilingualBaseTokenizer, BilingualUnigramTokenizer
+from .bilingual import (
+    BilingualBaseTokenizer,
+    BilingualBpeTokenizer,
+    BilingualUnigramTokenizer,
+    BilingualWordPieceTokenizer,
+)
 from .decoder import DecoderBaseTokenizer, DecoderUnigramTokenizer
 
 TOKENIZER_CLASSES = {
@@ -8,6 +13,8 @@ TOKENIZER_CLASSES = {
     "unigram": UnigramTokenizer,
     "decoder-unigram": DecoderUnigramTokenizer,
     "bilingual-unigram": BilingualUnigramTokenizer,
+    "bilingual-bpe": BilingualBpeTokenizer,
+    "bilingual-wordpiece": BilingualWordPieceTokenizer,
 }
 
 __all__ = [
@@ -19,5 +26,7 @@ __all__ = [
     "DecoderUnigramTokenizer",
     "BilingualBaseTokenizer",
     "BilingualUnigramTokenizer",
+    "BilingualBpeTokenizer",
+    "BilingualWordPieceTokenizer",
     "TOKENIZER_CLASSES",
 ]
