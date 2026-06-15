@@ -1,0 +1,14 @@
+{
+    "model": "transformer-complete",
+    "tokenizer": "bilingual-wordpiece",
+    "args": {
+        "encoder_layers": 4,
+        "decoder_layers": 4,
+        "d_model": 256,
+        "num_heads": 8,
+        "dropout": 0.1,
+        "inner_multiplier": 2.67,
+        "init_std_base": 0.02,
+        "theta": 10000.0
+    }
+}
