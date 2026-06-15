@@ -7,7 +7,39 @@
 
 \begin{table}[H]
 	\centering
-	\caption*{\textbf{Таблица А.1}~-- Конфигурации моделей для сравнения PE и RoPE}
+	\caption*{\textbf{Таблица А.1}~-- Базовая конфигурация Transformer encoder-decoder модели}
+	\begin{tabularx}{\textwidth}{|p{0.46\textwidth}|X|}
+		\hline
+		\textbf{Параметр} & \textbf{Значение} \\
+		\hline
+		Архитектура & Transformer encoder-decoder \\
+		\hline
+		Тип токенизатора & bilingual unigram или bilingual BPE \\
+		\hline
+		Размер словаря & 48 тыс. токенов \\
+		\hline
+		Позиционное представление & RoPE \\
+		\hline
+		Число слоев encoder & 4 \\
+		\hline
+		Число слоев decoder & 4 \\
+		\hline
+		Hidden size & 256 \\
+		\hline
+		Число attention-голов & 8 \\
+		\hline
+		FFN inner multiplier & 2{,}67 \\
+		\hline
+		Dropout & 0{,}1 \\
+		\hline
+		RoPE theta & 10000 \\
+		\hline
+	\end{tabularx}
+\end{table}
+
+\begin{table}[H]
+	\centering
+	\caption*{\textbf{Таблица А.2}~-- Конфигурации моделей для сравнения PE и RoPE}
 	\begin{tabularx}{\textwidth}{|p{0.42\textwidth}|X|X|}
 		\hline
 		\textbf{Параметр}         & \textbf{Модель с PE}         & \textbf{Модель с RoPE}       \\
@@ -37,7 +69,7 @@
 
 \begin{table}[H]
 	\centering
-	\caption*{\textbf{Таблица А.2}~-- Конфигурация GRPO-эксперимента}
+	\caption*{\textbf{Таблица А.3}~-- Конфигурация GRPO-эксперимента}
 	\begin{tabularx}{\textwidth}{|p{0.46\textwidth}|X|}
 		\hline
 		\textbf{Параметр} & \textbf{Значение} \\
@@ -71,7 +103,7 @@
 
 \begin{table}[H]
 	\centering
-	\caption*{\textbf{Таблица А.3}~-- Конфигурация модели для экспериментов с label smoothing}
+	\caption*{\textbf{Таблица А.4}~-- Конфигурация модели для экспериментов с label smoothing}
 	\begin{tabularx}{\textwidth}{|p{0.46\textwidth}|X|}
 		\hline
 		\textbf{Параметр} & \textbf{Значение} \\
@@ -99,7 +131,84 @@
 	\end{tabularx}
 \end{table}
 
-\Needspace{12\baselineskip}
+\Needspace{16\baselineskip}
+
+\begin{lstlisting}[language=Python,caption={Реализация лучшей Transformer encoder-decoder модели},label={lst:best-transformer-model}]
+class TransformerEncoder(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, dropout: float,
+                 inner_multiplier: float = 2.0, theta: float = 10000.0):
+        super().__init__()
+        self.attention = SelfAttention(
+            d_model, num_heads, dropout, theta=theta, causal=False
+        )
+        self.ffn = FFN(d_model, int(d_model * inner_multiplier))
+
+    def forward(self, x: Tensor, mask: Tensor):
+        x = x + self.attention(x, mask)
+        x = x + self.ffn(x)
+        return x
+
+
+class TransformerDecoder(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, dropout: float,
+                 inner_multiplier: float = 2.0, theta: float = 10000.0):
+        super().__init__()
+        self.self_attn = SelfAttention(
+            d_model, num_heads=num_heads, dropout=dropout,
+            theta=theta, causal=True,
+        )
+        self.cross_attn = CrossAttention(
+            d_model, num_heads=num_heads, dropout=dropout,
+        )
+        self.ffn = FFN(d_model, int(d_model * inner_multiplier))
+
+    def forward(self, x: Tensor, y: Tensor, mask: Tensor):
+        x = x + self.self_attn(x)
+        x = x + self.cross_attn(x, y, mask)
+        x = x + self.ffn(x)
+        return x
+
+
+class CompleteTransformerSeq2Seq(EncoderDecoderBilingual):
+    def __init__(self, vocab_size: int, pad_token_id: int,
+                 bos_token_id: int, eos_token_id: int,
+                 encoder_layers: int, decoder_layers: int,
+                 d_model: int, num_heads: int, dropout: float,
+                 inner_multiplier: float, theta: float):
+        super().__init__(vocab_size, pad_token_id, bos_token_id, eos_token_id)
+        self.embedding = nn.Embedding(vocab_size, d_model, pad_token_id)
+        self.norm = RMSNorm(d_model)
+        self.head = nn.Linear(d_model, vocab_size)
+        self.encoder = nn.ModuleList([
+            TransformerEncoder(d_model, num_heads, dropout,
+                               inner_multiplier, theta)
+            for _ in range(encoder_layers)
+        ])
+        self.decoder = nn.ModuleList([
+            TransformerDecoder(d_model, num_heads, dropout,
+                               inner_multiplier, theta)
+            for _ in range(decoder_layers)
+        ])
+
+    def encode(self, input_ids: Tensor, key_padding_mask: Tensor) -> Tensor:
+        y = self.embedding(input_ids)
+        for layer in self.encoder:
+            y = layer(y, key_padding_mask)
+        return y
+
+    def decode(self, output_ids: Tensor, encoder_outputs: Tensor,
+               key_padding_mask: Tensor) -> Tensor:
+        x = self.embedding(output_ids)
+        for layer in self.decoder:
+            x = layer(x, encoder_outputs, key_padding_mask)
+        return self.head(self.norm(x))
+
+    def forward(self, input_ids: Tensor, output_ids: Tensor,
+                attention_mask: Tensor) -> Tensor:
+        key_padding_mask = ~attention_mask.bool()
+        encoder_outputs = self.encode(input_ids, key_padding_mask)
+        return self.decode(output_ids, encoder_outputs, key_padding_mask)
+\end{lstlisting}
 
 \begin{lstlisting}[language=Python,caption={Реализация multi-head attention с FlashAttention},label={lst:flash-attention}]
 class SelfAttention(nn.Module):
