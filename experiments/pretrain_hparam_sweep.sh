@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runs separate one-dimensional sweeps with default values for other hyperparameters.
+# Tokenizer comparison: unigram vs bpe vs wordpiece.
+"$(dirname "$0")/sweep_tokenizer.sh"
+
+# One-dimensional hyperparameter sweeps on unigram only.
 "$(dirname "$0")/sweep_lr.sh"
 "$(dirname "$0")/sweep_beta1.sh"
 "$(dirname "$0")/sweep_beta2.sh"

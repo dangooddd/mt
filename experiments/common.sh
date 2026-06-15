@@ -2,7 +2,8 @@
 set -euo pipefail
 
 DATASET_PATH=${DATASET_PATH:-data/datasets/opus-yandex-paracrawl-un-flores}
-BASE_MODELS=(
+BASE_MODEL=${BASE_MODEL:-transformer-complete-small-unigram}
+TOKENIZER_MODELS=(
   transformer-complete-small-unigram
   transformer-complete-small-bpe
   transformer-complete-small-wordpiece
