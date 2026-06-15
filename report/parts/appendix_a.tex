@@ -1,0 +1,68 @@
+\clearpage
+\phantomsection
+\section*{ПРИЛОЖЕНИЕ А}
+\addcontentsline{toc}{section}{ПРИЛОЖЕНИЕ А}
+
+\begin{table}[H]
+	\centering
+	\caption*{\textbf{Таблица А.1}~-- Конфигурации моделей для сравнения PE и RoPE}
+	\begin{tabularx}{\textwidth}{|p{0.42\textwidth}|X|X|}
+		\hline
+		\textbf{Параметр}         & \textbf{Модель с PE}         & \textbf{Модель с RoPE}       \\
+		\hline
+		Архитектура               & Transformer encoder-decoder  & Transformer encoder-decoder  \\
+		\hline
+		Позиционное представление & absolute positional encoding & rotary positional embeddings \\
+		\hline
+		Число слоев encoder       & 8                            & 8                            \\
+		\hline
+		Число слоев decoder       & 8                            & 8                            \\
+		\hline
+		Hidden size               & 768                          & 768                          \\
+		\hline
+		Число attention-голов     & 12                           & 12                           \\
+		\hline
+		FFN inner multiplier      & 3                            & 3                            \\
+		\hline
+		Dropout                   & 0{,}05                       & 0{,}05                       \\
+		\hline
+		RoPE theta                & ---                          & 10000                        \\
+		\hline
+		Токенизаторы              & unigram                      & unigram                      \\
+		\hline
+	\end{tabularx}
+\end{table}
+
+\begin{table}[H]
+	\centering
+	\caption*{\textbf{Таблица А.2}~-- Конфигурация GRPO-эксперимента}
+	\begin{tabularx}{\textwidth}{|p{0.46\textwidth}|X|}
+		\hline
+		\textbf{Параметр} & \textbf{Значение} \\
+		\hline
+		Базовая архитектура & Transformer encoder-decoder \\
+		\hline
+		Токенизатор & bilingual unigram \\
+		\hline
+		Позиционное представление & RoPE \\
+		\hline
+		Число слоев encoder & 8 \\
+		\hline
+		Число слоев decoder & 8 \\
+		\hline
+		Hidden size & 768 \\
+		\hline
+		Число attention-голов & 12 \\
+		\hline
+		FFN inner multiplier & 2 \\
+		\hline
+		RoPE theta & 10000 \\
+		\hline
+		Размер группы GRPO & 4 варианта перевода \\
+		\hline
+		Reward & $\frac{1}{3} \cdot \frac{\operatorname{chrF}}{60} + \frac{2}{3} \cdot \frac{\operatorname{COMET}}{0{,}845}$ \\
+		\hline
+		Число обработанных примеров & около 50 тыс. \\
+		\hline
+	\end{tabularx}
+\end{table}
