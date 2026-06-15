@@ -11,10 +11,10 @@ TOKENIZER_MODELS=(
 
 BATCH_SIZE=${BATCH_SIZE:-100}
 # train rows: 7,270,832; batch 100 => ceil(real epoch) = 72,709 steps.
-# Use 10 virtual epochs for metrics: 7,271 * 10 = 72,710 steps,
-# i.e. one full dataset pass plus one extra batch.
-EPOCH_STEPS=${EPOCH_STEPS:-7271}
-STEPS=${STEPS:-72710}
+# Train for half a real epoch: ~36,354.5 steps.
+# Use 10 virtual epochs for validation: 3,636 * 10 = 36,360 steps.
+EPOCH_STEPS=${EPOCH_STEPS:-3636}
+STEPS=${STEPS:-36360}
 MAX_LENGTH=${MAX_LENGTH:-384}
 
 LR=${LR:-0.0003}
