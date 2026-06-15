@@ -32,6 +32,8 @@
 \usepackage{array}
 \usepackage{amsmath,amssymb}
 \usepackage{xcolor}
+\usepackage{needspace}
+\usepackage{listings}
 \usepackage{tikz}
 \usepackage{pgfplots}
 \pgfplotsset{compat=1.18}
@@ -80,8 +82,23 @@
 \captionsetup{font=normalsize,labelfont=bf,labelsep=endash,justification=centering,singlelinecheck=false}
 \captionsetup[figure]{position=bottom,name=Рисунок}
 \captionsetup[table]{position=top,justification=raggedright,singlelinecheck=false,name=Таблица}
-\AtBeginEnvironment{tabular}{\normalsize\singlespacing\setlength{\parindent}{0pt}}
-\AtBeginEnvironment{tabularx}{\normalsize\singlespacing\setlength{\parindent}{0pt}}
+\captionsetup[lstlisting]{position=top,justification=raggedright,singlelinecheck=false,labelfont=bf,labelsep=endash}
+\renewcommand{\lstlistingname}{Листинг}
+\lstset{
+  basicstyle=\footnotesize\ttfamily,
+  columns=fullflexible,
+  breaklines=true,
+  keepspaces=true,
+  numbers=left,
+  numberstyle=\scriptsize,
+  numbersep=8pt,
+  xleftmargin=1.25cm,
+  tabsize=4,
+  showstringspaces=false
+}
+\setlength{\extrarowheight}{2pt}
+\AtBeginEnvironment{tabular}{\normalsize\singlespacing\setlength{\parindent}{0pt}\renewcommand{\arraystretch}{1.25}}
+\AtBeginEnvironment{tabularx}{\normalsize\singlespacing\setlength{\parindent}{0pt}\renewcommand{\arraystretch}{1.25}}
 \AtBeginEnvironment{longtable}{\normalsize\singlespacing\setlength{\parindent}{0pt}\renewcommand{\arraystretch}{1.8}}
 \setlist{nosep,leftmargin=1.25cm,itemindent=0pt,topsep=0pt,parsep=0pt,partopsep=0pt}
 \renewcommand{\refname}{СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ}

@@ -2,6 +2,8 @@
 \phantomsection
 \section*{ПРИЛОЖЕНИЕ А}
 \addcontentsline{toc}{section}{ПРИЛОЖЕНИЕ А}
+\renewcommand{\thelstlisting}{А.\arabic{lstlisting}}
+\setcounter{lstlisting}{0}
 
 \begin{table}[H]
 	\centering
@@ -66,3 +68,246 @@
 		\hline
 	\end{tabularx}
 \end{table}
+
+\begin{table}[H]
+	\centering
+	\caption*{\textbf{Таблица А.3}~-- Конфигурация модели для экспериментов с label smoothing}
+	\begin{tabularx}{\textwidth}{|p{0.46\textwidth}|X|}
+		\hline
+		\textbf{Параметр} & \textbf{Значение} \\
+		\hline
+		Архитектура & Transformer encoder-decoder \\
+		\hline
+		Токенизатор исходного языка & unigram \\
+		\hline
+		Токенизатор целевого языка & unigram \\
+		\hline
+		Число слоев encoder & 6 \\
+		\hline
+		Число слоев decoder & 6 \\
+		\hline
+		Hidden size & 768 \\
+		\hline
+		Число attention-голов & 16 \\
+		\hline
+		FFN inner multiplier & 2 \\
+		\hline
+		Dropout & 0{,}05 \\
+		\hline
+		Максимальная длина входной последовательности & 2048 \\
+		\hline
+	\end{tabularx}
+\end{table}
+
+\Needspace{12\baselineskip}
+
+\begin{lstlisting}[language=Python,caption={Реализация multi-head attention с FlashAttention},label={lst:flash-attention}]
+class SelfAttention(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, dropout: float,
+                 causal: bool = False, theta: float = 10000.0):
+        super().__init__()
+        if d_model % num_heads != 0:
+            raise ValueError("d_model must be divisible by num_heads")
+
+        self.num_heads = num_heads
+        self.head_dim = d_model // num_heads
+        self.dropout = dropout
+        self.causal = causal
+        self.rope = RotaryEmbedding(self.head_dim, theta=theta)
+
+        self.q_proj = nn.Linear(d_model, d_model, bias=False)
+        self.k_proj = nn.Linear(d_model, d_model, bias=False)
+        self.v_proj = nn.Linear(d_model, d_model, bias=False)
+        self.o_proj = nn.Linear(d_model, d_model, bias=False)
+        self.norm = RMSNorm(d_model)
+
+    def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
+        batch_size, seq_length, d_model = x.shape
+        x = self.norm(x)
+
+        q = self.q_proj(x).view(batch_size, seq_length,
+                                self.num_heads, self.head_dim)
+        k = self.k_proj(x).view(batch_size, seq_length,
+                                self.num_heads, self.head_dim)
+        v = self.v_proj(x).view(batch_size, seq_length,
+                                self.num_heads, self.head_dim)
+
+        cos, sin = self.rope(seq_length, x.device, q.dtype)
+        q = self.rope.rotate(q, cos, sin)
+        k = self.rope.rotate(k, cos, sin)
+
+        if mask is None:
+            x = flash_attn_func(
+                q, k, v,
+                dropout_p=self.dropout if self.training else 0.0,
+                causal=self.causal,
+            )
+        else:
+            attention_mask = ~mask
+            q, indices, cu_seqlens, max_seqlen, _ = unpad_input(q, attention_mask)
+            k, _, _, _, _ = unpad_input(k, attention_mask)
+            v, _, _, _, _ = unpad_input(v, attention_mask)
+            x = flash_attn_varlen_func(
+                q, k, v,
+                cu_seqlens_q=cu_seqlens,
+                cu_seqlens_k=cu_seqlens,
+                max_seqlen_q=max_seqlen,
+                max_seqlen_k=max_seqlen,
+                dropout_p=self.dropout if self.training else 0.0,
+                causal=self.causal,
+            )
+            x = pad_input(x, indices, batch_size, seq_length)
+
+        x = x.contiguous().view(batch_size, seq_length, d_model)
+        return self.o_proj(x)
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python,caption={Реализация RoPE},label={lst:rope}]
+class RotaryEmbedding(nn.Module):
+    inv_freq: Tensor
+
+    def __init__(self, dim: int, theta: float = 10000.0):
+        super().__init__()
+        if dim % 2 != 0:
+            raise ValueError("RoPE head dimension must be even")
+
+        inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+    def forward(self, seq_length: int, device: torch.device,
+                dtype: torch.dtype) -> tuple[Tensor, Tensor]:
+        positions = torch.arange(seq_length, device=device,
+                                 dtype=self.inv_freq.dtype)
+        freqs = torch.outer(positions, self.inv_freq.to(device=device))
+        cos = freqs.cos().to(dtype=dtype)[None, :, None, :]
+        sin = freqs.sin().to(dtype=dtype)[None, :, None, :]
+        return cos, sin
+
+    def rotate(self, x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
+        x1 = x[..., 0::2]
+        x2 = x[..., 1::2]
+        return torch.stack(
+            (x1 * cos - x2 * sin, x1 * sin + x2 * cos),
+            dim=-1,
+        ).flatten(-2)
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python,caption={Реализация absolute positional encoding},label={lst:pe}]
+class PositionalEncoding(nn.Module):
+    pe: Tensor
+
+    def __init__(self, d_model: int, max_length: int = 5000):
+        super().__init__()
+        position = torch.arange(max_length).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model)
+        )
+
+        pe = torch.zeros(max_length, d_model)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term[: pe[:, 1::2].shape[1]])
+        self.register_buffer("pe", pe.unsqueeze(0))
+
+    def forward(self, x: Tensor):
+        return x + self.pe[:, : x.size(1)].to(dtype=x.dtype)
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python,caption={Создание scheduler в PyTorch},label={lst:scheduler}]
+warmup_scheduler = optim.lr_scheduler.LinearLR(
+    optimizer,
+    start_factor=0.01,
+    end_factor=1.0,
+    total_iters=args.warmup_steps,
+)
+
+cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+    optimizer,
+    T_max=(args.steps - args.warmup_steps),
+    eta_min=args.min_lr,
+)
+
+scheduler = optim.lr_scheduler.SequentialLR(
+    optimizer,
+    schedulers=[warmup_scheduler, cosine_scheduler],
+    milestones=[args.warmup_steps],
+)
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python,caption={Вычисление GRPO loss},label={lst:grpo-loss}]
+def grpo_loss(
+    per_token_logps: Tensor,
+    old_per_token_logps: Tensor,
+    ref_per_token_logps: Tensor,
+    mask: Tensor,
+    advantages: Tensor,
+    clip_eps: float,
+    kl_beta: float,
+) -> tuple[Tensor, dict[str, Any]]:
+    advantages = advantages.detach().view(-1, 1).to(dtype=per_token_logps.dtype)
+    mask = mask.to(dtype=per_token_logps.dtype)
+
+    per_token_ratio = torch.exp(per_token_logps - old_per_token_logps)
+    per_token_clipped_ratio = per_token_ratio.clamp(1.0 - clip_eps, 1.0 + clip_eps)
+    per_token_policy_loss = -torch.min(
+        per_token_ratio * advantages,
+        per_token_clipped_ratio * advantages,
+    )
+
+    kl_delta = torch.clamp(ref_per_token_logps - per_token_logps,
+                           min=-20.0, max=20.0)
+    per_token_kl = torch.exp(kl_delta) - kl_delta - 1.0
+
+    sequence_token_count = mask.sum(dim=1).clamp_min(1.0)
+    policy_loss = ((per_token_policy_loss * mask).sum(dim=1)
+                   / sequence_token_count).mean()
+    kl = ((per_token_kl * mask).sum(dim=1) / sequence_token_count).mean()
+    loss = policy_loss + kl_beta * kl
+
+    return loss, {
+        "policy_loss": float(policy_loss.detach().cpu()),
+        "kl": float(kl.detach().cpu()),
+    }
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python,caption={Генерация с temperature и top-p sampling},label={lst:temperature-top-p}]
+def apply_inference_params(
+    logits: Tensor,
+    temperature: float = 0.0,
+    top_p: float = 1.0,
+) -> Tensor:
+    logits = logits.float()
+    if temperature > 0.0:
+        logits = logits / temperature
+
+    if top_p == 1.0:
+        return logits
+
+    sorted_logits, sorted_indices = torch.sort(logits, descending=False, dim=-1)
+    cumulative_probabilities = sorted_logits.softmax(dim=-1).cumsum(dim=-1)
+    sorted_indices_to_remove = cumulative_probabilities <= (1 - top_p)
+    sorted_indices_to_remove[..., -1:] = False
+
+    indices_to_remove = torch.zeros_like(sorted_indices_to_remove).scatter(
+        -1,
+        sorted_indices,
+        sorted_indices_to_remove,
+    )
+    return logits.masked_fill(indices_to_remove, float("-inf"))
+
+
+def sample_next_token(
+    logits: Tensor,
+    temperature: float = 0.0,
+    top_p: float = 1.0,
+) -> Tensor:
+    if temperature == 0.0:
+        return logits.argmax(dim=-1)
+
+    logits = apply_inference_params(logits, temperature, top_p)
+    probabilities = torch.softmax(logits, dim=-1)
+    sampled = torch.multinomial(
+        probabilities.reshape(-1, probabilities.size(-1)),
+        num_samples=1,
+    )
+    return sampled.reshape(probabilities.shape[:-1])
+\end{lstlisting}
