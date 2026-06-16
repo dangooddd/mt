@@ -321,6 +321,32 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:, : x.size(1)].to(dtype=x.dtype)
 \end{lstlisting}
 
+\begin{lstlisting}[language=Python,caption={Разделение параметров для weight decay},label={lst:split-decay-params}]
+def split_decay_params(model: nn.Module):
+    decay = []
+    no_decay = []
+
+    for name, param in model.named_parameters():
+        name = name.lower()
+        if name.endswith(".bias") or ("norm" in name) or ("embedding" in name):
+            no_decay.append(param)
+        else:
+            decay.append(param)
+
+    return decay, no_decay
+
+
+decay, no_decay = split_decay_params(model)
+optimizer = torch.optim.AdamW(
+    [
+        {"params": decay, "weight_decay": args.weight_decay},
+        {"params": no_decay, "weight_decay": 0.0},
+    ],
+    lr=args.lr,
+    betas=(args.beta1, args.beta2),
+)
+\end{lstlisting}
+
 \begin{lstlisting}[language=Python,caption={Создание scheduler в PyTorch},label={lst:scheduler}]
 warmup_scheduler = optim.lr_scheduler.LinearLR(
     optimizer,
