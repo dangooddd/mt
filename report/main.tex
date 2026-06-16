@@ -43,6 +43,7 @@
 \usepackage{titlesec}
 \usepackage{tocloft}
 \usepackage{etoolbox}
+\usepackage{pdfpages}
 \usepackage{hyperref}
 \urlstyle{same}
 \def\UrlFont{\CourseCodeFont}
@@ -81,7 +82,7 @@
 
 \captionsetup{font=normalsize,labelfont=bf,labelsep=endash,justification=centering,singlelinecheck=false}
 \captionsetup[figure]{position=bottom,name=Рисунок}
-\captionsetup[table]{position=top,justification=raggedright,singlelinecheck=false,name=Таблица}
+\captionsetup[table]{position=top,justification=raggedright,singlelinecheck=false,name=Таблица,skip=4pt}
 \captionsetup[lstlisting]{position=top,justification=raggedright,singlelinecheck=false,labelfont=bf,labelsep=endash}
 \renewcommand{\lstlistingname}{Листинг}
 \lstset{
@@ -124,6 +125,8 @@
 
 \begin{document}
 
+\includepdf[pages=-]{title.pdf}
+\setcounter{page}{2}
 \tableofcontents
 \clearpage
 
