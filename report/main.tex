@@ -86,8 +86,8 @@
 
 \captionsetup{font=normalsize,labelfont=bf,labelsep=endash,justification=centering,singlelinecheck=false}
 \captionsetup[figure]{position=bottom,name=Рисунок}
-\captionsetup[table]{position=top,justification=raggedright,singlelinecheck=false,name=Таблица,skip=4pt}
-\captionsetup[lstlisting]{position=top,justification=raggedright,singlelinecheck=false,labelfont=bf,labelsep=endash}
+\captionsetup[table]{position=top,justification=raggedright,singlelinecheck=false,name=Таблица,skip=3pt}
+\captionsetup[lstlisting]{position=top,justification=raggedright,singlelinecheck=false,labelfont=bf,labelsep=endash,skip=6pt}
 \renewcommand{\lstlistingname}{Листинг}
 \lstset{
   basicstyle=\footnotesize\ttfamily,
@@ -97,7 +97,13 @@
   numbers=left,
   numberstyle=\scriptsize,
   numbersep=8pt,
-  xleftmargin=1.25cm,
+  xleftmargin=0.91cm,
+  xrightmargin=0.15cm,
+  frame=single,
+  framerule=0.4pt,
+  framesep=4pt,
+  framexleftmargin=0.75cm,
+  rulecolor=\color{black},
   tabsize=4,
   showstringspaces=false
 }
