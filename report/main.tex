@@ -118,13 +118,12 @@
   \normalfont\normalsize
   \list{\@biblabel{\@arabic\c@enumiv}}%
        {\settowidth\labelwidth{\@biblabel{#1}}%
+        \leftmargin=1.25cm
         \labelsep=0.5em
-        \leftmargin=\dimexpr1.25cm+\labelwidth+\labelsep\relax
         \itemindent=0pt
         \listparindent=1.25cm
         \parsep=0pt
         \itemsep=0pt
-        \def\makelabel##1{##1\hfil}%
         \usecounter{enumiv}%
         \let\p@enumiv\@empty
         \renewcommand\theenumiv{\@arabic\c@enumiv}}%
